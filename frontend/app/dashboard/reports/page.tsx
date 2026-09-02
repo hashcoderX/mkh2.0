@@ -135,30 +135,6 @@ export default function ReportsHubPage() {
         ],
       },
       {
-        key: 'savings',
-        title: 'Savings and Deposit Related Reports',
-        icon: '💸',
-        gradient: 'from-amber-500 to-orange-500',
-        bg: 'from-amber-50 to-orange-50',
-        reports: [
-          {
-            title: 'Savings Ledger Report',
-            description: 'Savings deposits, withdrawals, and balances by account.',
-            path: '/dashboard/savings-deposits/reports/ledger',
-          },
-          {
-            title: 'Deposit Growth Report',
-            description: 'Period-over-period savings and deposit growth summary.',
-            path: '/dashboard/savings-deposits/reports/deposit-growth',
-          },
-          {
-            title: 'Maturity Report',
-            description: 'Upcoming and completed deposit maturities.',
-            path: '/dashboard/savings-deposits/reports/maturity',
-          },
-        ],
-      },
-      {
         key: 'finance',
         title: 'Finance Management Related Reports',
         icon: '💰',
@@ -259,7 +235,7 @@ export default function ReportsHubPage() {
               </span>
               <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">All Reports Hub</h1>
               <p className="text-sm text-slate-600 mt-1">
-                View all report domains in one place: Micro Finance, Mortgage Management, Savings and Deposits, Finance Management, and Branch Management.
+                View all report domains in one place: Micro Finance, Mortgage Management, Finance Management, and Branch Management.
               </p>
             </div>
 

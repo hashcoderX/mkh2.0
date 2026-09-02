@@ -106,4 +106,9 @@ class MicrofinanceLoanRequest extends Model
     {
         return $this->hasMany(MicrofinanceLoanCollection::class, 'mf_loan_request_id');
     }
+
+    public function customer()
+    {
+        return $this->hasOne(Customer::class, 'nic_passport', 'nic');
+    }
 }

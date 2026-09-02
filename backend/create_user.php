@@ -9,7 +9,7 @@ use App\Models\Role;
 use App\Models\User;
 use Illuminate\Support\Facades\Hash;
 
-$email = 'superadmin@gmail.com';
+$email = 'superadmin@softcodelk.com';
 $plainPassword = 'password';
 
 $user = User::firstOrNew(['email' => $email]);

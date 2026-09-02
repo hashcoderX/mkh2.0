@@ -8,9 +8,13 @@ import autoTable from 'jspdf-autotable';
 
 type LoanRow = {
   id: number;
+  loan_code?: string | null;
   customer_no?: string | null;
   customer_name?: string | null;
   field_officer?: string | null;
+  loan_amount?: number | string | null;
+  net_disbursed_amount?: number | string | null;
+  loan_balance?: number | string | null;
 };
 
 type CollectionRow = {
@@ -24,21 +28,40 @@ type CollectionRow = {
   penalty_amount?: number | string;
   payment_type?: string | null;
   payment_reference?: string | null;
+  loan_request?: {
+    id?: number | string;
+    loan_code?: string | null;
+    customer_no?: string | null;
+    customer_name?: string | null;
+    field_officer?: string | null;
+    loan_amount?: number | string | null;
+    net_disbursed_amount?: number | string | null;
+    loan_balance?: number | string | null;
+  } | null;
 };
 
 type TransactionRow = {
   id: number;
   date: string;
   loanId: number;
+  loanCode: string;
   customerNo: string;
   customerName: string;
   fieldOfficer: string;
+  loanAmount: number;
+  loanBalance: number;
   collected: number;
   capital: number;
   interest: number;
   penalty: number;
   paymentType: string;
   reference: string;
+};
+
+const toNullableNumber = (value: unknown): number | null => {
+  if (value === null || typeof value === 'undefined' || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const API_BASE = 'http://localhost:8000/api';
@@ -52,6 +75,8 @@ export default function FieldOfficerCollectionReportPage() {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [officerFilter, setOfficerFilter] = useState('all');
+  const [pageSize, setPageSize] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
 
@@ -100,18 +125,46 @@ export default function FieldOfficerCollectionReportPage() {
           loanMap.set(Number(loan.id), loan);
         });
 
+        const capitalCollectedByLoan = new Map<number, number>();
+        collections.forEach((collection) => {
+          const loanId = Number(collection.mf_loan_request_id || 0);
+          if (!loanId) return;
+          const existing = capitalCollectedByLoan.get(loanId) || 0;
+          capitalCollectedByLoan.set(loanId, existing + Number(collection.capital_amount || 0));
+        });
+
         const mapped: TransactionRow[] = collections
           .map((collection) => {
             const loanId = Number(collection.mf_loan_request_id || 0);
             const loan = loanMap.get(loanId);
+            const relationLoan = collection.loan_request || null;
+
+            const issuedAmountRaw =
+              toNullableNumber(loan?.net_disbursed_amount) ??
+              toNullableNumber(loan?.loan_amount) ??
+              toNullableNumber(relationLoan?.net_disbursed_amount) ??
+              toNullableNumber(relationLoan?.loan_amount) ??
+              0;
+
+            const storedBalance =
+              toNullableNumber(loan?.loan_balance) ??
+              toNullableNumber(relationLoan?.loan_balance);
+
+            const derivedBalance = Math.max(
+              issuedAmountRaw - Number(capitalCollectedByLoan.get(loanId) || 0),
+              0
+            );
 
             return {
               id: Number(collection.id),
               date: String(collection.collection_date || collection.created_at || ''),
               loanId,
-              customerNo: String(loan?.customer_no || '-'),
-              customerName: String(loan?.customer_name || '-'),
-              fieldOfficer: String(loan?.field_officer || 'Unassigned'),
+              loanCode: String(loan?.loan_code || relationLoan?.loan_code || `LR-${loanId || 0}`),
+              customerNo: String(loan?.customer_no || relationLoan?.customer_no || '-'),
+              customerName: String(loan?.customer_name || relationLoan?.customer_name || '-'),
+              fieldOfficer: String(loan?.field_officer || relationLoan?.field_officer || 'Unassigned'),
+              loanAmount: issuedAmountRaw,
+              loanBalance: storedBalance === null ? derivedBalance : storedBalance,
               collected: Number(collection.collected_amount || 0),
               capital: Number(collection.capital_amount || 0),
               interest: Number(collection.interest_amount || 0),
@@ -226,6 +279,23 @@ export default function FieldOfficerCollectionReportPage() {
     };
   }, [filteredRows, officerSummaries.length]);
 
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+
+  const pagedRows = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredRows.slice(start, start + pageSize);
+  }, [filteredRows, currentPage, pageSize]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [officerFilter, fromDate, toDate, pageSize]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
   const formatDateTime = (value: string) => {
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) {
@@ -254,6 +324,8 @@ export default function FieldOfficerCollectionReportPage() {
       'Loan ID',
       'Loan Code',
       'Customer',
+      'Loan Amount',
+      'Loan Balance',
       'Payment Type',
       'Reference',
       'Collected',
@@ -274,8 +346,10 @@ export default function FieldOfficerCollectionReportPage() {
       formatDateTime(row.date),
       row.fieldOfficer,
       row.loanId || '-',
-      row.customerNo,
+      row.loanCode,
       row.customerName,
+      formatMoney(row.loanAmount),
+      formatMoney(row.loanBalance),
       row.paymentType,
       row.reference,
       formatMoney(row.collected),
@@ -325,6 +399,8 @@ export default function FieldOfficerCollectionReportPage() {
         'Loan ID',
         'Loan Code',
         'Customer',
+        'Loan Amount',
+        'Loan Balance',
         'Payment Type',
         'Reference',
         'Collected',
@@ -336,8 +412,10 @@ export default function FieldOfficerCollectionReportPage() {
         formatDateTime(row.date),
         row.fieldOfficer,
         row.loanId || '-',
-        row.customerNo,
+        row.loanCode,
         row.customerName,
+        formatMoney(row.loanAmount),
+        formatMoney(row.loanBalance),
         row.paymentType,
         row.reference,
         formatMoney(row.collected),
@@ -365,66 +443,70 @@ export default function FieldOfficerCollectionReportPage() {
 
   if (!token || loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
+      <div className="min-h-screen bg-[radial-gradient(circle_at_top,#dbeafe_0%,#ecfeff_45%,#f0fdfa_100%)] flex items-center justify-center">
+        <div className="h-14 w-14 animate-spin rounded-full border-4 border-cyan-200 border-t-cyan-600 shadow-lg"></div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-6 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-45">
-        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
-        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl"></div>
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,#e0f2fe_0%,#ecfeff_35%,#f0fdfa_100%)] p-4 md:p-6 relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 opacity-50">
+        <div className="absolute -top-24 left-10 h-80 w-80 rounded-full bg-sky-300/70 blur-3xl"></div>
+        <div className="absolute top-24 right-4 h-96 w-96 rounded-full bg-cyan-300/60 blur-3xl"></div>
+        <div className="absolute -bottom-10 left-1/3 h-80 w-80 rounded-full bg-emerald-300/55 blur-3xl"></div>
+      </div>
+      <div className="pointer-events-none absolute inset-0 opacity-20 [background-image:linear-gradient(to_right,rgba(8,145,178,0.15)_1px,transparent_1px),linear-gradient(to_bottom,rgba(8,145,178,0.15)_1px,transparent_1px)] [background-size:26px_26px]">
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
+        <div className="relative overflow-hidden bg-white/85 backdrop-blur-xl rounded-3xl border border-white/80 shadow-[0_24px_70px_-34px_rgba(14,116,144,0.5)] p-6 md:p-7">
+          <div className="pointer-events-none absolute -right-24 -top-24 h-56 w-56 rounded-full bg-cyan-200/60 blur-3xl"></div>
+          <div className="pointer-events-none absolute -left-16 bottom-0 h-40 w-40 rounded-full bg-emerald-200/60 blur-2xl"></div>
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
-              <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
+              <span className="inline-flex rounded-full bg-gradient-to-r from-cyan-600 to-sky-600 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-white shadow">
                 Reports Desk
               </span>
-              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">Field Officer Collection Report</h1>
-              <p className="text-sm text-slate-600 mt-1">Measure collection outcomes by officer with contribution and trend visibility.</p>
+              <h1 className="text-2xl md:text-4xl font-black text-slate-900 mt-3 tracking-tight">Field Officer Collection Report</h1>
+              <p className="text-sm text-slate-600 mt-1 max-w-2xl">Measure collection outcomes by officer with contribution trends, recovery quality, and portfolio discipline.</p>
             </div>
             <button
               onClick={() => router.back()}
-              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
+              className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-700 text-white text-sm font-semibold shadow-md"
             >
               Back
             </button>
           </div>
 
           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3">
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Transactions</p>
-              <p className="text-sm font-extrabold text-slate-900 mt-1">{summary.transactionCount}</p>
+            <div className="rounded-2xl bg-gradient-to-br from-cyan-500 to-sky-600 border border-cyan-300/40 shadow-md p-4 text-white">
+              <p className="text-xs uppercase tracking-wide text-cyan-100">Transactions</p>
+              <p className="text-base font-extrabold mt-1">{summary.transactionCount}</p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Officers</p>
-              <p className="text-sm font-extrabold text-slate-900 mt-1">{summary.officerCount}</p>
+            <div className="rounded-2xl bg-gradient-to-br from-indigo-500 to-blue-600 border border-indigo-300/40 shadow-md p-4 text-white">
+              <p className="text-xs uppercase tracking-wide text-indigo-100">Officers</p>
+              <p className="text-base font-extrabold mt-1">{summary.officerCount}</p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Collected</p>
-              <p className="text-sm font-extrabold text-slate-900 mt-1">
+            <div className="rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 border border-emerald-300/40 shadow-md p-4 text-white">
+              <p className="text-xs uppercase tracking-wide text-emerald-100">Collected</p>
+              <p className="text-sm font-extrabold mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.collected)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-white/90 border border-cyan-100 shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Capital</p>
               <p className="text-sm font-extrabold text-slate-900 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.capital)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-white/90 border border-cyan-100 shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Interest</p>
               <p className="text-sm font-extrabold text-slate-900 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.interest)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-white/90 border border-rose-100 shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Penalty</p>
               <p className="text-sm font-extrabold text-rose-700 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.penalty)}
@@ -433,21 +515,21 @@ export default function FieldOfficerCollectionReportPage() {
           </div>
         </div>
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
+        <div className="bg-white/88 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_48px_-24px_rgba(14,116,144,0.45)] p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-lg font-bold text-slate-900">Officer Performance Summary</h2>
-            <div className="flex items-end gap-2 flex-wrap">
+            <div className="flex items-end gap-2 flex-wrap rounded-2xl bg-slate-50/80 border border-slate-100 p-2">
               <button
                 type="button"
                 onClick={handleDownloadCsv}
-                className="px-3 py-2 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-sm font-semibold border border-emerald-200"
+                className="px-3 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white text-sm font-semibold border border-emerald-400 shadow-sm"
               >
                 Download CSV
               </button>
               <button
                 type="button"
                 onClick={handleDownloadPdf}
-                className="px-3 py-2 rounded-xl bg-cyan-100 hover:bg-cyan-200 text-cyan-800 text-sm font-semibold border border-cyan-200"
+                className="px-3 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-600 hover:from-cyan-600 hover:to-sky-700 text-white text-sm font-semibold border border-cyan-400 shadow-sm"
               >
                 Download PDF
               </button>
@@ -456,7 +538,7 @@ export default function FieldOfficerCollectionReportPage() {
                 <select
                   value={officerFilter}
                   onChange={(e) => setOfficerFilter(e.target.value)}
-                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-200"
                 >
                   <option value="all">All Officers</option>
                   {officerOptions.map((officer) => (
@@ -472,7 +554,7 @@ export default function FieldOfficerCollectionReportPage() {
                   type="date"
                   value={fromDate}
                   onChange={(e) => setFromDate(e.target.value)}
-                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-200"
                 />
               </div>
               <div>
@@ -481,7 +563,7 @@ export default function FieldOfficerCollectionReportPage() {
                   type="date"
                   value={toDate}
                   onChange={(e) => setToDate(e.target.value)}
-                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-200"
                 />
               </div>
               <button
@@ -491,7 +573,7 @@ export default function FieldOfficerCollectionReportPage() {
                   setFromDate('');
                   setToDate('');
                 }}
-                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold"
+                className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 text-sm font-semibold border border-slate-200"
               >
                 Reset
               </button>
@@ -503,9 +585,9 @@ export default function FieldOfficerCollectionReportPage() {
               No data found for selected filters.
             </div>
           ) : (
-            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100">
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100 bg-white shadow-inner">
               <table className="min-w-full text-sm text-left text-slate-700 bg-white">
-                <thead className="bg-cyan-50/70 text-slate-700">
+                <thead className="bg-gradient-to-r from-cyan-600 to-sky-600 text-white">
                   <tr>
                     <th className="px-3 py-2 font-semibold">Field Officer</th>
                     <th className="px-3 py-2 font-semibold">Transactions</th>
@@ -518,7 +600,7 @@ export default function FieldOfficerCollectionReportPage() {
                 </thead>
                 <tbody>
                   {officerSummaries.map((item) => (
-                    <tr key={item.officer} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
+                    <tr key={item.officer} className="border-b border-cyan-100 last:border-b-0 odd:bg-white even:bg-cyan-50/30 hover:bg-cyan-50/60 transition-colors">
                       <td className="px-3 py-2 font-semibold text-slate-900">{item.officer}</td>
                       <td className="px-3 py-2">{item.transactions}</td>
                       <td className="px-3 py-2">{item.loanCount}</td>
@@ -534,50 +616,95 @@ export default function FieldOfficerCollectionReportPage() {
           )}
         </div>
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
-          <h2 className="text-lg font-bold text-slate-900">Transaction Details</h2>
+        <div className="bg-white/88 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_48px_-24px_rgba(14,116,144,0.45)] p-4 md:p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <h2 className="text-lg font-bold text-slate-900">Transaction Details</h2>
+            <div className="flex items-center gap-2 text-sm text-slate-700">
+              <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Rows</label>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="px-2.5 py-1.5 rounded-lg border border-cyan-100 bg-white text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-cyan-200"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-3 rounded-xl border border-cyan-100 bg-gradient-to-r from-cyan-50/80 via-sky-50/70 to-emerald-50/70 px-3 py-2 text-xs sm:text-sm text-slate-600">
+            Showing <span className="font-bold text-slate-800">{pagedRows.length}</span> of <span className="font-bold text-slate-800">{filteredRows.length}</span> transaction(s).
+          </div>
 
           {filteredRows.length === 0 ? (
             <div className="mt-4 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-100/60 to-teal-100/40 p-8 text-sm text-slate-700 text-center">
               No transactions available.
             </div>
           ) : (
-            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100">
-              <table className="min-w-full text-sm text-left text-slate-700 bg-white">
-                <thead className="bg-cyan-50/70 text-slate-700">
-                  <tr>
-                    <th className="px-3 py-2 font-semibold">Date & Time</th>
-                    <th className="px-3 py-2 font-semibold">Field Officer</th>
-                    <th className="px-3 py-2 font-semibold">Loan ID</th>
-                    <th className="px-3 py-2 font-semibold">Loan Code</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">Payment Type</th>
-                    <th className="px-3 py-2 font-semibold">Reference</th>
-                    <th className="px-3 py-2 font-semibold">Collected</th>
-                    <th className="px-3 py-2 font-semibold">Capital</th>
-                    <th className="px-3 py-2 font-semibold">Interest</th>
-                    <th className="px-3 py-2 font-semibold">Penalty</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredRows.map((row) => (
-                    <tr key={row.id} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
-                      <td className="px-3 py-2">{formatDateTime(row.date)}</td>
-                      <td className="px-3 py-2">{row.fieldOfficer}</td>
-                      <td className="px-3 py-2">{row.loanId || '-'}</td>
-                      <td className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>
-                      <td className="px-3 py-2">{row.customerName}</td>
-                      <td className="px-3 py-2 capitalize">{row.paymentType}</td>
-                      <td className="px-3 py-2">{row.reference}</td>
-                      <td className="px-3 py-2 font-semibold text-emerald-700">{formatMoney(row.collected)}</td>
-                      <td className="px-3 py-2">{formatMoney(row.capital)}</td>
-                      <td className="px-3 py-2">{formatMoney(row.interest)}</td>
-                      <td className="px-3 py-2">{formatMoney(row.penalty)}</td>
+            <>
+              <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100 bg-white shadow-inner">
+                <table className="min-w-full text-sm text-left text-slate-700 bg-white">
+                  <thead className="bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-800 text-white sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Date & Time</th>
+                      <th className="px-3 py-2 font-semibold">Field Officer</th>
+                      <th className="px-3 py-2 font-semibold">Loan ID</th>
+                      <th className="px-3 py-2 font-semibold">Loan Code</th>
+                      <th className="px-3 py-2 font-semibold">Customer</th>
+                      <th className="px-3 py-2 font-semibold">Loan Amount</th>
+                      <th className="px-3 py-2 font-semibold">Loan Balance</th>
+                      <th className="px-3 py-2 font-semibold">Payment Type</th>
+                      <th className="px-3 py-2 font-semibold">Reference</th>
+                      <th className="px-3 py-2 font-semibold">Collected</th>
+                      <th className="px-3 py-2 font-semibold">Capital</th>
+                      <th className="px-3 py-2 font-semibold">Interest</th>
+                      <th className="px-3 py-2 font-semibold">Penalty</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {pagedRows.map((row) => (
+                      <tr key={row.id} className="border-b border-cyan-100 last:border-b-0 odd:bg-white even:bg-cyan-50/25 hover:bg-cyan-50/60 transition-colors">
+                        <td className="px-3 py-2">{formatDateTime(row.date)}</td>
+                        <td className="px-3 py-2">{row.fieldOfficer}</td>
+                        <td className="px-3 py-2">{row.loanId || '-'}</td>
+                        <td className="px-3 py-2 font-semibold text-slate-900">{row.loanCode}</td>
+                        <td className="px-3 py-2">{row.customerName}</td>
+                        <td className="px-3 py-2">{formatMoney(row.loanAmount)}</td>
+                        <td className="px-3 py-2">{formatMoney(row.loanBalance)}</td>
+                        <td className="px-3 py-2 capitalize">{row.paymentType}</td>
+                        <td className="px-3 py-2">{row.reference}</td>
+                        <td className="px-3 py-2 font-semibold text-emerald-700">{formatMoney(row.collected)}</td>
+                        <td className="px-3 py-2">{formatMoney(row.capital)}</td>
+                        <td className="px-3 py-2">{formatMoney(row.interest)}</td>
+                        <td className="px-3 py-2">{formatMoney(row.penalty)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                  disabled={currentPage <= 1}
+                  className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <span className="text-sm text-white font-semibold rounded-md bg-slate-800 px-2.5 py-1">Page {currentPage} of {totalPages}</span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+                  disabled={currentPage >= totalPages}
+                  className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </>
           )}
         </div>
       </div>

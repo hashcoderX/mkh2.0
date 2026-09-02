@@ -8,11 +8,13 @@ import autoTable from 'jspdf-autotable';
 
 type LoanRow = {
   id: number;
+  loan_code?: string | null;
   status?: string | null;
   customer_no?: string | null;
   customer_name?: string | null;
   field_officer?: string | null;
   due_date?: string | null;
+  installment_amount?: number | string | null;
   refundable_amount?: number | string | null;
   arrears_balance?: number | string | null;
 };
@@ -24,11 +26,13 @@ type CollectionRow = {
 
 type ArrearsRow = {
   loanId: number;
+  loanCode: string;
   customerNo: string;
   customerName: string;
   fieldOfficer: string;
   dueDate: string;
   overdueDays: number;
+  installmentAmount: number;
   totalPayable: number;
   paidAmount: number;
   pendingAmount: number;
@@ -114,21 +118,27 @@ export default function ArrearsReportPage() {
               ? Math.max(Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)), 0)
               : 0;
 
+            const installmentAmount = Number(loan.installment_amount || 0);
             const totalPayable = Number(loan.refundable_amount || 0);
             const paidAmount = paidByLoan.get(loanId) || 0;
             const pendingAmount = Math.max(totalPayable - paidAmount, 0);
-            const arrearsAmount = Math.max(Number(loan.arrears_balance || 0), 0);
+            const rawArrearsAmount = Math.max(Number(loan.arrears_balance || 0), 0);
+            const scheduledArrearsAmount = Math.max(overdueDays * installmentAmount, 0);
+            const arrearsBaseAmount = scheduledArrearsAmount > 0 ? scheduledArrearsAmount : rawArrearsAmount;
+            const arrearsAmount = Math.min(arrearsBaseAmount, pendingAmount);
 
             const isOverdue = overdueDays > 0 && pendingAmount > 0;
             const status = arrearsAmount > 0 ? 'Arrears' : isOverdue ? 'Overdue' : 'Current';
 
             return {
               loanId,
+              loanCode: String(loan.loan_code || loan.customer_no || `LR-${loanId || 0}`),
               customerNo: String(loan.customer_no || '-'),
               customerName: String(loan.customer_name || '-'),
               fieldOfficer: String(loan.field_officer || 'Unassigned'),
               dueDate: dueDateText || '-',
               overdueDays,
+              installmentAmount,
               totalPayable,
               paidAmount,
               pendingAmount,
@@ -221,6 +231,7 @@ export default function ArrearsReportPage() {
       'Field Officer',
       'Due Date',
       'Overdue Days',
+      'Installment',
       'Total Payable',
       'Paid Amount',
       'Pending Amount',
@@ -238,11 +249,12 @@ export default function ArrearsReportPage() {
 
     const body = filteredRows.map((row) => [
       row.loanId || '-',
-      row.customerNo,
+      row.loanCode,
       row.customerName,
       row.fieldOfficer,
       formatDate(row.dueDate),
       row.overdueDays,
+      formatMoney(row.installmentAmount),
       formatMoney(row.totalPayable),
       formatMoney(row.paidAmount),
       formatMoney(row.pendingAmount),
@@ -288,6 +300,7 @@ export default function ArrearsReportPage() {
         'Field Officer',
         'Due Date',
         'Overdue Days',
+        'Installment',
         'Total Payable',
         'Paid',
         'Pending',
@@ -296,11 +309,12 @@ export default function ArrearsReportPage() {
       ]],
       body: filteredRows.map((row) => [
         row.loanId || '-',
-        row.customerNo,
+        row.loanCode,
         row.customerName,
         row.fieldOfficer,
         formatDate(row.dueDate),
         row.overdueDays,
+        formatMoney(row.installmentAmount),
         formatMoney(row.totalPayable),
         formatMoney(row.paidAmount),
         formatMoney(row.pendingAmount),
@@ -327,60 +341,64 @@ export default function ArrearsReportPage() {
 
   if (!token || loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
+      <div className="min-h-screen bg-[radial-gradient(circle_at_top,#e0f2fe_0%,#ecfeff_45%,#f0fdfa_100%)] flex items-center justify-center">
+        <div className="h-14 w-14 animate-spin rounded-full border-4 border-cyan-200 border-t-cyan-600 shadow-lg"></div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-6 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-45">
-        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
-        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl"></div>
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,#dbeafe_0%,#ecfeff_35%,#f0fdfa_100%)] p-4 md:p-6 relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 opacity-50">
+        <div className="absolute -top-24 left-10 h-80 w-80 rounded-full bg-sky-300/70 blur-3xl"></div>
+        <div className="absolute top-24 right-4 h-96 w-96 rounded-full bg-cyan-300/60 blur-3xl"></div>
+        <div className="absolute -bottom-10 left-1/3 h-80 w-80 rounded-full bg-emerald-300/55 blur-3xl"></div>
+      </div>
+      <div className="pointer-events-none absolute inset-0 opacity-20 [background-image:linear-gradient(to_right,rgba(8,145,178,0.15)_1px,transparent_1px),linear-gradient(to_bottom,rgba(8,145,178,0.15)_1px,transparent_1px)] [background-size:26px_26px]">
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
+        <div className="relative overflow-hidden bg-white/85 backdrop-blur-xl rounded-3xl border border-white/80 shadow-[0_24px_70px_-34px_rgba(14,116,144,0.5)] p-6 md:p-7">
+          <div className="pointer-events-none absolute -right-24 -top-24 h-56 w-56 rounded-full bg-cyan-200/60 blur-3xl"></div>
+          <div className="pointer-events-none absolute -left-16 bottom-0 h-40 w-40 rounded-full bg-amber-200/50 blur-2xl"></div>
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
-              <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
+              <span className="inline-flex rounded-full bg-gradient-to-r from-cyan-600 to-sky-600 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-white shadow">
                 Reports Desk
               </span>
-              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">Arrears Report</h1>
-              <p className="text-sm text-slate-600 mt-1">Track overdue and arrears-heavy loan accounts with pending exposure details.</p>
+              <h1 className="text-2xl md:text-4xl font-black text-slate-900 mt-3 tracking-tight">Arrears Report</h1>
+              <p className="text-sm text-slate-600 mt-1 max-w-2xl">Track overdue and arrears-heavy loan accounts with pending exposure, risk intensity, and follow-up priority.</p>
             </div>
             <button
               onClick={() => router.back()}
-              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
+              className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-700 text-white text-sm font-semibold shadow-md"
             >
               Back
             </button>
           </div>
 
           <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3">
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Accounts</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.accountCount}</p>
+            <div className="rounded-2xl bg-gradient-to-br from-cyan-500 to-sky-600 border border-cyan-300/40 shadow-md p-4 text-white">
+              <p className="text-xs uppercase tracking-wide text-cyan-100">Accounts</p>
+              <p className="text-2xl font-extrabold mt-1">{summary.accountCount}</p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Overdue / Arrears</p>
-              <p className="text-2xl font-extrabold text-amber-700 mt-1">{summary.overdueCount} / {summary.arrearsCount}</p>
+            <div className="rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 border border-amber-300/40 shadow-md p-4 text-white">
+              <p className="text-xs uppercase tracking-wide text-amber-100">Overdue / Arrears</p>
+              <p className="text-2xl font-extrabold mt-1">{summary.overdueCount} / {summary.arrearsCount}</p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-gradient-to-br from-rose-500 to-red-600 border border-rose-300/40 shadow-md p-4 text-white">
               <p className="text-xs uppercase tracking-wide text-slate-500">Pending Amount</p>
-              <p className="text-2xl font-extrabold text-rose-700 mt-1">
+              <p className="text-2xl font-extrabold mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-white/90 border border-orange-100 shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Arrears Amount</p>
               <p className="text-2xl font-extrabold text-orange-700 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.arrears)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-white/90 border border-emerald-100 shadow-sm p-4">
               <p className="text-xs uppercase tracking-wide text-slate-500">Paid Amount</p>
               <p className="text-2xl font-extrabold text-emerald-700 mt-1">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.paid)}
@@ -389,21 +407,21 @@ export default function ArrearsReportPage() {
           </div>
         </div>
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
+        <div className="bg-white/88 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_48px_-24px_rgba(14,116,144,0.45)] p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-lg font-bold text-slate-900">Arrears Accounts</h2>
-            <div className="flex items-end gap-2 flex-wrap">
+            <div className="flex items-end gap-2 flex-wrap rounded-2xl bg-slate-50/80 border border-slate-100 p-2">
               <button
                 type="button"
                 onClick={handleDownloadCsv}
-                className="px-3 py-2 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-sm font-semibold border border-emerald-200"
+                className="px-3 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white text-sm font-semibold border border-emerald-400 shadow-sm"
               >
                 Download CSV
               </button>
               <button
                 type="button"
                 onClick={handleDownloadPdf}
-                className="px-3 py-2 rounded-xl bg-cyan-100 hover:bg-cyan-200 text-cyan-800 text-sm font-semibold border border-cyan-200"
+                className="px-3 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-600 hover:from-cyan-600 hover:to-sky-700 text-white text-sm font-semibold border border-cyan-400 shadow-sm"
               >
                 Download PDF
               </button>
@@ -412,7 +430,7 @@ export default function ArrearsReportPage() {
                 <select
                   value={officerFilter}
                   onChange={(e) => setOfficerFilter(e.target.value)}
-                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-200"
                 >
                   <option value="all">All Officers</option>
                   {officerOptions.map((officer) => (
@@ -427,7 +445,7 @@ export default function ArrearsReportPage() {
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as 'all' | 'overdue' | 'arrears')}
-                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-200"
                 >
                   <option value="all">All</option>
                   <option value="overdue">Overdue</option>
@@ -440,7 +458,7 @@ export default function ArrearsReportPage() {
                   setOfficerFilter('all');
                   setStatusFilter('all');
                 }}
-                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold"
+                className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 text-sm font-semibold border border-slate-200"
               >
                 Reset
               </button>
@@ -452,9 +470,9 @@ export default function ArrearsReportPage() {
               No arrears data found for selected filters.
             </div>
           ) : (
-            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100">
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100 bg-white shadow-inner">
               <table className="min-w-full text-sm text-left text-slate-700 bg-white">
-                <thead className="bg-cyan-50/70 text-slate-700">
+                <thead className="bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-800 text-white sticky top-0">
                   <tr>
                     <th className="px-3 py-2 font-semibold">Loan ID</th>
                     <th className="px-3 py-2 font-semibold">Loan Code</th>
@@ -462,6 +480,7 @@ export default function ArrearsReportPage() {
                     <th className="px-3 py-2 font-semibold">Field Officer</th>
                     <th className="px-3 py-2 font-semibold">Due Date</th>
                     <th className="px-3 py-2 font-semibold">Overdue Days</th>
+                    <th className="px-3 py-2 font-semibold">Installment</th>
                     <th className="px-3 py-2 font-semibold">Total Payable</th>
                     <th className="px-3 py-2 font-semibold">Paid</th>
                     <th className="px-3 py-2 font-semibold">Pending</th>
@@ -471,13 +490,14 @@ export default function ArrearsReportPage() {
                 </thead>
                 <tbody>
                   {filteredRows.map((row) => (
-                    <tr key={row.loanId} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
+                    <tr key={row.loanId} className="border-b border-cyan-100 last:border-b-0 odd:bg-white even:bg-cyan-50/25 hover:bg-cyan-50/60 transition-colors">
                       <td className="px-3 py-2">{row.loanId || '-'}</td>
-                      <td className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>
+                      <td className="px-3 py-2 font-semibold text-slate-900">{row.loanCode}</td>
                       <td className="px-3 py-2">{row.customerName}</td>
                       <td className="px-3 py-2">{row.fieldOfficer}</td>
                       <td className="px-3 py-2">{formatDate(row.dueDate)}</td>
                       <td className="px-3 py-2 font-semibold text-amber-700">{row.overdueDays}</td>
+                      <td className="px-3 py-2">{formatMoney(row.installmentAmount)}</td>
                       <td className="px-3 py-2">{formatMoney(row.totalPayable)}</td>
                       <td className="px-3 py-2 text-emerald-700">{formatMoney(row.paidAmount)}</td>
                       <td className="px-3 py-2 font-semibold text-rose-700">{formatMoney(row.pendingAmount)}</td>

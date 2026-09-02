@@ -81,7 +81,7 @@ class LoanCollectionController extends Controller
     public function index(Request $request)
     {
         $query = MicrofinanceLoanCollection::query()
-            ->with('loanRequest:id,customer_no,customer_name')
+            ->with('loanRequest:id,loan_code,customer_no,customer_name,field_officer,loan_amount,net_disbursed_amount,loan_balance')
             ->orderByDesc('id');
 
         if ($request->filled('loan_request_id')) {
@@ -168,17 +168,10 @@ class LoanCollectionController extends Controller
             $accruedInstallmentCount++;
         }
 
-        $arrearsOutstandingBefore = max($arrearsBalanceBefore, 0);
-        $arrearsDeducted = min($collectedAmount, $arrearsOutstandingBefore);
-        $remainingAfterArrears = max($collectedAmount - $arrearsDeducted, 0);
-        $arrearsBalanceAfterPayment = $arrearsBalanceBefore - $collectedAmount;
-        $arrearsOutstandingAfter = max($arrearsBalanceAfterPayment, 0);
-        $extraPaymentAfter = max(-$arrearsBalanceAfterPayment, 0);
-
         $penaltyRate = (float)($loanRequest->penalty_rate ?? 0);
         $graceDays = max((int)($loanRequest->penalty_grace_days ?? 2), 0);
         $lateDays = 0;
-        $penaltyAmount = 0.0;
+        $penaltyAssessed = 0.0;
 
         if (!empty($loanRequest->due_date) && $penaltyRate > 0) {
             $dueDate = new \DateTimeImmutable((string)$loanRequest->due_date);
@@ -188,9 +181,20 @@ class LoanCollectionController extends Controller
             if ($dayDiff > $graceDays) {
                 $lateDays = $dayDiff - $graceDays;
                 // Daily penalty based on installment amount and penalty rate.
-                $penaltyAmount = ($installmentAmount * $penaltyRate * $lateDays) / 100;
+                $penaltyAssessed = ($installmentAmount * $penaltyRate * $lateDays) / 100;
             }
         }
+
+        // Allocate payment to penalty first so arrears balance is not overstated as paid.
+        $penaltyAmount = min($collectedAmount, max($penaltyAssessed, 0));
+        $amountAfterPenalty = max($collectedAmount - $penaltyAmount, 0);
+
+        $arrearsOutstandingBefore = max($arrearsBalanceBefore, 0);
+        $arrearsDeducted = min($amountAfterPenalty, $arrearsOutstandingBefore);
+        $remainingAfterArrears = max($amountAfterPenalty - $arrearsDeducted, 0);
+        $arrearsBalanceAfterPayment = $arrearsBalanceBefore - $amountAfterPenalty;
+        $arrearsOutstandingAfter = max($arrearsBalanceAfterPayment, 0);
+        $extraPaymentAfter = max(-$arrearsBalanceAfterPayment, 0);
 
         $totalCapitalCollected = (float)MicrofinanceLoanCollection::query()
             ->where('mf_loan_request_id', $loanRequest->id)
@@ -198,9 +202,8 @@ class LoanCollectionController extends Controller
 
         $outstandingPrincipal = max($loanAmount - $totalCapitalCollected, 0);
 
-        $remainingAfterPenalty = max($remainingAfterArrears - $penaltyAmount, 0);
-        $interestAmount = min($remainingAfterPenalty, $interestPerInstallment);
-        $capitalAmount = max($remainingAfterPenalty - $interestAmount, 0);
+        $interestAmount = min($remainingAfterArrears, $interestPerInstallment);
+        $capitalAmount = max($remainingAfterArrears - $interestAmount, 0);
 
         if ($capitalAmount > $outstandingPrincipal) {
             $overflow = $capitalAmount - $outstandingPrincipal;
@@ -268,6 +271,7 @@ class LoanCollectionController extends Controller
                 'capital_amount' => round($capitalAmount, 2),
                 'interest_amount' => round($interestAmount, 2),
                 'penalty_amount' => round($penaltyAmount, 2),
+                'penalty_assessed' => round($penaltyAssessed, 2),
                 'penalty_rate' => round($penaltyRate, 4),
                 'grace_days' => $graceDays,
                 'late_days' => $lateDays,

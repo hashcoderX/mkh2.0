@@ -12,6 +12,8 @@ type LoanRow = {
   customer_no?: string | null;
   customer_name?: string | null;
   field_officer?: string | null;
+  loan_amount?: number | string | null;
+  net_disbursed_amount?: number | string | null;
 };
 
 type CollectionRow = {
@@ -25,6 +27,15 @@ type CollectionRow = {
   penalty_amount?: number | string;
   payment_type?: string | null;
   payment_reference?: string | null;
+  loan_request?: {
+    id?: number | string;
+    loan_code?: string | null;
+    customer_no?: string | null;
+    customer_name?: string | null;
+    field_officer?: string | null;
+    loan_amount?: number | string | null;
+    net_disbursed_amount?: number | string | null;
+  } | null;
 };
 
 type ReportRow = {
@@ -34,6 +45,7 @@ type ReportRow = {
   customerNo: string;
   customerName: string;
   fieldOfficer: string;
+  loanAmount: number;
   collected: number;
   capital: number;
   interest: number;
@@ -52,6 +64,8 @@ export default function CollectionReportPage() {
   const [rows, setRows] = useState<ReportRow[]>([]);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [pageSize, setPageSize] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
 
@@ -106,14 +120,23 @@ export default function CollectionReportPage() {
           .map((collection) => {
             const loanId = Number(collection.mf_loan_request_id || 0);
             const loan = loanMap.get(loanId);
+            const relationLoan = collection.loan_request || null;
+            const issuedAmount = Number(
+              loan?.net_disbursed_amount ??
+              loan?.loan_amount ??
+              relationLoan?.net_disbursed_amount ??
+              relationLoan?.loan_amount ??
+              0
+            );
 
             return {
               id: Number(collection.id),
               date: String(collection.collection_date || collection.created_at || ''),
-              loanCode: String(loan?.loan_code || `LR-${loanId || 0}`),
-              customerNo: String(loan?.customer_no || '-'),
-              customerName: String(loan?.customer_name || '-'),
-              fieldOfficer: String(loan?.field_officer || 'Unassigned'),
+              loanCode: String(loan?.loan_code || relationLoan?.loan_code || `LR-${loanId || 0}`),
+              customerNo: String(loan?.customer_no || relationLoan?.customer_no || '-'),
+              customerName: String(loan?.customer_name || relationLoan?.customer_name || '-'),
+              fieldOfficer: String(loan?.field_officer || relationLoan?.field_officer || 'Unassigned'),
+              loanAmount: Number.isFinite(issuedAmount) ? issuedAmount : 0,
               collected: Number(collection.collected_amount || 0),
               capital: Number(collection.capital_amount || 0),
               interest: Number(collection.interest_amount || 0),
@@ -195,6 +218,23 @@ export default function CollectionReportPage() {
     };
   }, [filteredRows]);
 
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+
+  const pagedRows = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredRows.slice(start, start + pageSize);
+  }, [filteredRows, currentPage, pageSize]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [fromDate, toDate, pageSize]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
   const formatDateTime = (value: string) => {
     const parsed = new Date(value);
     if (Number.isNaN(parsed.getTime())) {
@@ -223,6 +263,7 @@ export default function CollectionReportPage() {
       'Customer No',
       'Customer',
       'Field Officer',
+      'Loan Amount',
       'Payment Type',
       'Reference',
       'Collected',
@@ -245,6 +286,7 @@ export default function CollectionReportPage() {
       row.customerNo,
       row.customerName,
       row.fieldOfficer,
+      formatMoney(row.loanAmount),
       row.paymentType,
       row.reference,
       formatMoney(row.collected),
@@ -292,6 +334,7 @@ export default function CollectionReportPage() {
         'Customer No',
         'Customer',
         'Field Officer',
+        'Loan Amount',
         'Payment Type',
         'Reference',
         'Collected',
@@ -305,6 +348,7 @@ export default function CollectionReportPage() {
         row.customerNo,
         row.customerName,
         row.fieldOfficer,
+        formatMoney(row.loanAmount),
         row.paymentType,
         row.reference,
         formatMoney(row.collected),
@@ -473,8 +517,46 @@ export default function CollectionReportPage() {
           </div>
 
           <div className="mt-3 rounded-xl border border-cyan-100 bg-gradient-to-r from-cyan-50/80 via-sky-50/70 to-emerald-50/70 px-3 py-2 text-xs sm:text-sm text-slate-600">
-            Showing <span className="font-bold text-slate-800">{filteredRows.length}</span> transaction(s)
+            Showing <span className="font-bold text-slate-800">{pagedRows.length}</span> of <span className="font-bold text-slate-800">{filteredRows.length}</span> transaction(s)
             {fromDate || toDate ? ` for ${fromDate || 'Start'} to ${toDate || 'End'}` : ' for all dates'}.
+          </div>
+
+          <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2 text-sm text-slate-700">
+              <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Rows</label>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="px-2.5 py-1.5 rounded-lg border border-cyan-100 bg-white text-sm text-slate-800"
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                disabled={currentPage <= 1}
+                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Previous
+              </button>
+              <span className="text-sm text-slate-700 font-semibold">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+                disabled={currentPage >= totalPages}
+                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Next
+              </button>
+            </div>
           </div>
 
           {filteredRows.length === 0 ? (
@@ -484,7 +566,7 @@ export default function CollectionReportPage() {
           ) : (
             <>
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 lg:hidden">
-                {filteredRows.map((row) => (
+                {pagedRows.map((row) => (
                   <div
                     key={row.id}
                     className="rounded-2xl border border-cyan-100 bg-white/90 p-4 shadow-sm"
@@ -511,6 +593,9 @@ export default function CollectionReportPage() {
 
                       <p className="text-slate-500">Officer</p>
                       <p className="text-slate-800 text-right">{row.fieldOfficer}</p>
+
+                      <p className="text-slate-500">Loan Amount</p>
+                      <p className="font-semibold text-slate-900 text-right">{formatMoney(row.loanAmount)}</p>
 
                       <p className="text-slate-500">Payment</p>
                       <p className="capitalize text-slate-800 text-right">{row.paymentType}</p>
@@ -550,6 +635,7 @@ export default function CollectionReportPage() {
                       <th className="px-3 py-2 font-semibold">Customer No</th>
                       <th className="px-3 py-2 font-semibold">Customer</th>
                       <th className="px-3 py-2 font-semibold">Field Officer</th>
+                      <th className="px-3 py-2 font-semibold">Loan Amount</th>
                       <th className="px-3 py-2 font-semibold">Payment Type</th>
                       <th className="px-3 py-2 font-semibold">Reference</th>
                       <th className="px-3 py-2 font-semibold">Collected</th>
@@ -559,13 +645,14 @@ export default function CollectionReportPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredRows.map((row) => (
+                    {pagedRows.map((row) => (
                       <tr key={row.id} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
                         <td className="px-3 py-2">{formatDateTime(row.date)}</td>
                         <td className="px-3 py-2 font-semibold text-slate-900">{row.loanCode}</td>
                         <td className="px-3 py-2">{row.customerNo}</td>
                         <td className="px-3 py-2">{row.customerName}</td>
                         <td className="px-3 py-2">{row.fieldOfficer}</td>
+                        <td className="px-3 py-2">{formatMoney(row.loanAmount)}</td>
                         <td className="px-3 py-2 capitalize">{row.paymentType}</td>
                         <td className="px-3 py-2">{row.reference}</td>
                         <td className="px-3 py-2 font-semibold text-emerald-700">{formatMoney(row.collected)}</td>

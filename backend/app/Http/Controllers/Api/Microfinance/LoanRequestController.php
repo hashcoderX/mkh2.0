@@ -1004,6 +1004,7 @@ class LoanRequestController extends Controller
             'route:id,name,code',
             'center:id,name,code',
             'group:id,name,code',
+            'customer:id,customer_code,first_name,last_name,phone,nic_passport',
             'guarantors',
             'documents',
         ])

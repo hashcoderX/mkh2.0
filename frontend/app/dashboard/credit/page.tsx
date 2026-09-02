@@ -163,6 +163,8 @@ export default function CreditDashboardPage() {
     return moduleName === 'Loan Management' || moduleName === 'Finance Management';
   };
 
+  const hiddenModuleNames = new Set(['Loan Management', 'Finance Management']);
+
   const canAccessModule = (module: CreditModule) => {
     if (isBlockedForCollectionOfficer(module.name)) {
       return false;
@@ -171,7 +173,9 @@ export default function CreditDashboardPage() {
     return canAccess(module.requiredModules, module.requiredPermissionKeywords);
   };
 
-  const visibleModules = modules.filter((module) => canAccessModule(module));
+  const visibleModules = modules.filter(
+    (module) => canAccessModule(module) && !hiddenModuleNames.has(module.name)
+  );
 
   if (!token || loadingPrivileges) {
     return (

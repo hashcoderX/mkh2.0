@@ -11,11 +11,16 @@ type LoanRow = {
   status?: string | null;
   customer_no?: string | null;
   customer_name?: string | null;
+  customer?: {
+    first_name?: string | null;
+    last_name?: string | null;
+  } | null;
   contact_no?: string | null;
-  nic?: string | null;
   field_officer?: string | null;
   loan_amount?: number | string | null;
+  installment_amount?: number | string | null;
   refundable_amount?: number | string | null;
+  arrears_balance?: number | string | null;
   due_date?: string | null;
   branch_id?: number | string | null;
 };
@@ -29,7 +34,6 @@ type ActiveMemberRow = {
   loanId: number;
   customerNo: string;
   customerName: string;
-  nic: string;
   contact: string;
   fieldOfficer: string;
   status: string;
@@ -37,6 +41,7 @@ type ActiveMemberRow = {
   refundableAmount: number;
   collectedAmount: number;
   pendingAmount: number;
+  arrearsAmount: number;
   dueDate: string;
 };
 
@@ -50,6 +55,8 @@ export default function ActiveMemberReportPage() {
   const [rows, setRows] = useState<ActiveMemberRow[]>([]);
   const [officerFilter, setOfficerFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'approved' | 'released'>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
 
@@ -100,6 +107,9 @@ export default function ActiveMemberReportPage() {
           paidByLoan.set(loanId, (paidByLoan.get(loanId) || 0) + Number(collection.collected_amount || 0));
         });
 
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
         const mapped = loans
           .filter((loan) => {
             const status = String(loan.status || '').toLowerCase();
@@ -107,22 +117,37 @@ export default function ActiveMemberReportPage() {
           })
           .map((loan) => {
             const loanId = Number(loan.id || 0);
+            const dueDateText = String(loan.due_date || '').slice(0, 10);
+            const dueDate = dueDateText ? new Date(`${dueDateText}T00:00:00`) : null;
+            const dueDateValid = !!dueDate && !Number.isNaN(dueDate.getTime());
+            const overdueDays = dueDateValid
+              ? Math.max(Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)), 0)
+              : 0;
+
             const refundableAmount = Number(loan.refundable_amount || 0);
             const collectedAmount = paidByLoan.get(loanId) || 0;
+            const pendingAmount = Math.max(refundableAmount - collectedAmount, 0);
+            const rawArrearsAmount = Math.max(Number(loan.arrears_balance || 0), 0);
+            const installmentAmount = Math.max(Number(loan.installment_amount || 0), 0);
+            const scheduledArrearsAmount = overdueDays > 0 ? overdueDays * installmentAmount : 0;
+            const arrearsBaseAmount = scheduledArrearsAmount > 0 ? scheduledArrearsAmount : rawArrearsAmount;
+            const firstName = String(loan.customer?.first_name || '').trim();
+            const lastName = String(loan.customer?.last_name || '').trim();
+            const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
 
             return {
               loanId,
               customerNo: String(loan.customer_no || '-'),
-              customerName: String(loan.customer_name || '-'),
-              nic: String(loan.nic || '-'),
+              customerName: fullName || String(loan.customer_name || '-'),
               contact: String(loan.contact_no || '-'),
               fieldOfficer: String(loan.field_officer || 'Unassigned'),
               status: String(loan.status || '-'),
               loanAmount: Number(loan.loan_amount || 0),
               refundableAmount,
               collectedAmount,
-              pendingAmount: Math.max(refundableAmount - collectedAmount, 0),
-              dueDate: String(loan.due_date || '').slice(0, 10) || '-',
+              pendingAmount,
+              arrearsAmount: Math.min(arrearsBaseAmount, pendingAmount),
+              dueDate: dueDateText || '-',
             } as ActiveMemberRow;
           })
           .sort((a, b) => b.pendingAmount - a.pendingAmount);
@@ -155,6 +180,23 @@ export default function ActiveMemberReportPage() {
       return true;
     });
   }, [rows, officerFilter, statusFilter]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [officerFilter, statusFilter, pageSize]);
+
+  const totalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  }, [filteredRows.length, pageSize]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
+
+  const pagedRows = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredRows.slice(start, start + pageSize);
+  }, [filteredRows, currentPage, pageSize]);
 
   const summary = useMemo(() => {
     return filteredRows.reduce(
@@ -197,7 +239,6 @@ export default function ActiveMemberReportPage() {
       'Loan ID',
       'Customer No',
       'Customer Name',
-      'NIC',
       'Contact',
       'Field Officer',
       'Status',
@@ -205,6 +246,7 @@ export default function ActiveMemberReportPage() {
       'Refundable Amount',
       'Collected Amount',
       'Pending Amount',
+      'Arrears Amount',
       'Due Date',
     ];
 
@@ -220,7 +262,6 @@ export default function ActiveMemberReportPage() {
       row.loanId,
       row.customerNo,
       row.customerName,
-      row.nic,
       row.contact,
       row.fieldOfficer,
       row.status,
@@ -228,6 +269,7 @@ export default function ActiveMemberReportPage() {
       formatMoney(row.refundableAmount),
       formatMoney(row.collectedAmount),
       formatMoney(row.pendingAmount),
+      formatMoney(row.arrearsAmount),
       formatDate(row.dueDate),
     ]);
 
@@ -266,7 +308,6 @@ export default function ActiveMemberReportPage() {
         'Loan ID',
         'Customer No',
         'Customer Name',
-        'NIC',
         'Contact',
         'Field Officer',
         'Status',
@@ -274,13 +315,13 @@ export default function ActiveMemberReportPage() {
         'Refundable',
         'Collected',
         'Pending',
+        'Arrears',
         'Due Date',
       ]],
       body: filteredRows.map((row) => [
         row.loanId,
         row.customerNo,
         row.customerName,
-        row.nic,
         row.contact,
         row.fieldOfficer,
         row.status,
@@ -288,6 +329,7 @@ export default function ActiveMemberReportPage() {
         formatMoney(row.refundableAmount),
         formatMoney(row.collectedAmount),
         formatMoney(row.pendingAmount),
+        formatMoney(row.arrearsAmount),
         formatDate(row.dueDate),
       ]),
       styles: {
@@ -310,85 +352,89 @@ export default function ActiveMemberReportPage() {
 
   if (!token || loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-600"></div>
+      <div className="min-h-screen bg-[radial-gradient(circle_at_top,#e0f2fe_0%,#ecfeff_45%,#f0fdfa_100%)] flex items-center justify-center">
+        <div className="h-14 w-14 animate-spin rounded-full border-4 border-cyan-200 border-t-cyan-600 shadow-lg"></div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 p-6 relative overflow-hidden">
-      <div className="pointer-events-none absolute inset-0 opacity-45">
-        <div className="absolute -top-20 left-14 h-72 w-72 rounded-full bg-blue-300 blur-3xl"></div>
-        <div className="absolute top-20 right-8 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
-        <div className="absolute bottom-0 left-1/3 h-72 w-72 rounded-full bg-teal-300 blur-3xl"></div>
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,#dbeafe_0%,#ecfeff_35%,#f0fdfa_100%)] p-4 md:p-6 relative overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 opacity-50">
+        <div className="absolute -top-24 left-10 h-80 w-80 rounded-full bg-sky-300/70 blur-3xl"></div>
+        <div className="absolute top-24 right-4 h-96 w-96 rounded-full bg-cyan-300/60 blur-3xl"></div>
+        <div className="absolute -bottom-10 left-1/3 h-80 w-80 rounded-full bg-emerald-300/55 blur-3xl"></div>
+      </div>
+      <div className="pointer-events-none absolute inset-0 opacity-20 [background-image:linear-gradient(to_right,rgba(8,145,178,0.15)_1px,transparent_1px),linear-gradient(to_bottom,rgba(8,145,178,0.15)_1px,transparent_1px)] [background-size:26px_26px]">
       </div>
 
       <div className="relative z-10 max-w-7xl mx-auto space-y-6">
-        <div className="bg-white/82 backdrop-blur-xl rounded-3xl border border-white/70 shadow-[0_20px_60px_-30px_rgba(14,116,144,0.45)] p-6 md:p-7">
+        <div className="relative overflow-hidden bg-white/85 backdrop-blur-xl rounded-3xl border border-white/80 shadow-[0_24px_70px_-34px_rgba(14,116,144,0.5)] p-6 md:p-7">
+          <div className="pointer-events-none absolute -right-24 -top-24 h-56 w-56 rounded-full bg-cyan-200/60 blur-3xl"></div>
+          <div className="pointer-events-none absolute -left-16 bottom-0 h-40 w-40 rounded-full bg-amber-200/50 blur-2xl"></div>
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div>
-              <span className="inline-flex rounded-full bg-white px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-cyan-700 border border-cyan-100">
+              <span className="inline-flex rounded-full bg-gradient-to-r from-cyan-600 to-sky-600 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] text-white shadow">
                 Reports Desk
               </span>
-              <h1 className="text-2xl md:text-3xl font-extrabold text-slate-900 mt-3">Active Member Report</h1>
-              <p className="text-sm text-slate-600 mt-1">View active members with loan exposure, collected amount, and pending balance profile.</p>
+              <h1 className="text-2xl md:text-4xl font-black text-slate-900 mt-3 tracking-tight">Active Member Report</h1>
+              <p className="text-sm text-slate-600 mt-1 max-w-2xl">View active members with loan exposure, repayment movement, and pending balance profile for faster field follow-up.</p>
             </div>
             <button
               onClick={() => router.back()}
-              className="px-4 py-2 rounded-xl bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold border border-slate-200 shadow-sm"
+              className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-700 text-white text-sm font-semibold shadow-md"
             >
               Back
             </button>
           </div>
 
-          <div className="mt-5 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3">
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Active Members</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">{summary.memberCount}</p>
+          <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5 gap-3">
+            <div className="rounded-2xl bg-gradient-to-br from-cyan-500 to-sky-600 border border-cyan-300/40 shadow-md p-4 md:p-5 text-white min-w-0">
+              <p className="text-xs uppercase tracking-wide text-cyan-100">Active Members</p>
+              <p className="mt-1 text-[12px] leading-tight font-extrabold tabular-nums">{summary.memberCount}</p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Loan Amount</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">
+            <div className="rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 border border-violet-300/40 shadow-md p-4 md:p-5 text-white min-w-0">
+              <p className="text-xs uppercase tracking-wide text-violet-100">Loan Amount</p>
+              <p className="mt-1 text-[12px] leading-tight font-extrabold break-words tabular-nums">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.loanAmount)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Refundable</p>
-              <p className="text-2xl font-extrabold text-slate-900 mt-1">
+            <div className="rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 border border-amber-300/40 shadow-md p-4 md:p-5 text-white min-w-0">
+              <p className="text-xs uppercase tracking-wide text-amber-100">Refundable</p>
+              <p className="mt-1 text-[12px] leading-tight font-extrabold break-words tabular-nums">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.refundable)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
+            <div className="rounded-2xl bg-white/90 border border-emerald-100 shadow-sm p-4 md:p-5 min-w-0">
               <p className="text-xs uppercase tracking-wide text-slate-500">Collected</p>
-              <p className="text-2xl font-extrabold text-emerald-700 mt-1">
+              <p className="mt-1 text-[12px] leading-tight font-extrabold break-words tabular-nums text-emerald-700">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.collected)}
               </p>
             </div>
-            <div className="rounded-xl bg-white/90 border border-white shadow-sm p-4">
-              <p className="text-xs uppercase tracking-wide text-slate-500">Pending</p>
-              <p className="text-2xl font-extrabold text-rose-700 mt-1">
+            <div className="rounded-2xl bg-gradient-to-br from-rose-500 to-red-600 border border-rose-300/40 shadow-md p-4 md:p-5 text-white min-w-0">
+              <p className="text-xs uppercase tracking-wide text-rose-100">Pending</p>
+              <p className="mt-1 text-[12px] leading-tight font-extrabold break-words tabular-nums">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending)}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
+        <div className="bg-white/88 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_48px_-24px_rgba(14,116,144,0.45)] p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-lg font-bold text-slate-900">Active Member Accounts</h2>
-            <div className="flex items-end gap-2 flex-wrap">
+            <div className="flex items-end gap-2 flex-wrap rounded-2xl bg-slate-50/80 border border-slate-100 p-2">
               <button
                 type="button"
                 onClick={handleDownloadCsv}
-                className="px-3 py-2 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 text-sm font-semibold border border-emerald-200"
+                className="px-3 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white text-sm font-semibold border border-emerald-400 shadow-sm"
               >
                 Download CSV
               </button>
               <button
                 type="button"
                 onClick={handleDownloadPdf}
-                className="px-3 py-2 rounded-xl bg-cyan-100 hover:bg-cyan-200 text-cyan-800 text-sm font-semibold border border-cyan-200"
+                className="px-3 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-sky-600 hover:from-cyan-600 hover:to-sky-700 text-white text-sm font-semibold border border-cyan-400 shadow-sm"
               >
                 Download PDF
               </button>
@@ -397,7 +443,7 @@ export default function ActiveMemberReportPage() {
                 <select
                   value={officerFilter}
                   onChange={(e) => setOfficerFilter(e.target.value)}
-                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-200"
                 >
                   <option value="all">All Officers</option>
                   {officerOptions.map((officer) => (
@@ -412,7 +458,7 @@ export default function ActiveMemberReportPage() {
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as 'all' | 'approved' | 'released')}
-                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900"
+                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-200"
                 >
                   <option value="all">All</option>
                   <option value="approved">Approved</option>
@@ -425,7 +471,7 @@ export default function ActiveMemberReportPage() {
                   setOfficerFilter('all');
                   setStatusFilter('all');
                 }}
-                className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold"
+                className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 text-sm font-semibold border border-slate-200"
               >
                 Reset
               </button>
@@ -437,52 +483,92 @@ export default function ActiveMemberReportPage() {
               No active member data found for selected filters.
             </div>
           ) : (
-            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100">
-              <table className="min-w-full text-sm text-left text-slate-700 bg-white">
-                <thead className="bg-cyan-50/70 text-slate-700">
-                  <tr>
-                    <th className="px-3 py-2 font-semibold">Loan ID</th>
-                    <th className="px-3 py-2 font-semibold">Customer No</th>
-                    <th className="px-3 py-2 font-semibold">Customer</th>
-                    <th className="px-3 py-2 font-semibold">NIC</th>
-                    <th className="px-3 py-2 font-semibold">Contact</th>
-                    <th className="px-3 py-2 font-semibold">Field Officer</th>
-                    <th className="px-3 py-2 font-semibold">Status</th>
-                    <th className="px-3 py-2 font-semibold">Loan Amount</th>
-                    <th className="px-3 py-2 font-semibold">Refundable</th>
-                    <th className="px-3 py-2 font-semibold">Collected</th>
-                    <th className="px-3 py-2 font-semibold">Pending</th>
-                    <th className="px-3 py-2 font-semibold">Due Date</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredRows.map((row) => (
-                    <tr key={row.loanId} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
-                      <td className="px-3 py-2">{row.loanId || '-'}</td>
-                      <td className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>
-                      <td className="px-3 py-2">{row.customerName}</td>
-                      <td className="px-3 py-2">{row.nic}</td>
-                      <td className="px-3 py-2">{row.contact}</td>
-                      <td className="px-3 py-2">{row.fieldOfficer}</td>
-                      <td className="px-3 py-2">
-                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${
-                          String(row.status).toLowerCase() === 'released'
-                            ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                            : 'border-blue-200 bg-blue-50 text-blue-800'
-                        }`}>
-                          {row.status}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">{formatMoney(row.loanAmount)}</td>
-                      <td className="px-3 py-2">{formatMoney(row.refundableAmount)}</td>
-                      <td className="px-3 py-2 text-emerald-700 font-semibold">{formatMoney(row.collectedAmount)}</td>
-                      <td className="px-3 py-2 text-rose-700 font-semibold">{formatMoney(row.pendingAmount)}</td>
-                      <td className="px-3 py-2">{formatDate(row.dueDate)}</td>
+            <>
+              <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100 bg-white shadow-inner">
+                <table className="min-w-full text-sm text-left text-slate-700 bg-white">
+                  <thead className="bg-gradient-to-r from-slate-900 via-slate-800 to-cyan-800 text-white sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Loan ID</th>
+                      <th className="px-3 py-2 font-semibold">Customer No</th>
+                      <th className="px-3 py-2 font-semibold">Customer</th>
+                      <th className="px-3 py-2 font-semibold">Contact</th>
+                      <th className="px-3 py-2 font-semibold">Field Officer</th>
+                      <th className="px-3 py-2 font-semibold">Status</th>
+                      <th className="px-3 py-2 font-semibold">Loan Amount</th>
+                      <th className="px-3 py-2 font-semibold">Refundable</th>
+                      <th className="px-3 py-2 font-semibold">Collected</th>
+                      <th className="px-3 py-2 font-semibold">Pending</th>
+                      <th className="px-3 py-2 font-semibold">Arrears</th>
+                      <th className="px-3 py-2 font-semibold">Due Date</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {pagedRows.map((row) => (
+                      <tr key={row.loanId} className="border-b border-cyan-100 last:border-b-0 odd:bg-white even:bg-cyan-50/25 hover:bg-cyan-50/60 transition-colors">
+                        <td className="px-3 py-2">{row.loanId || '-'}</td>
+                        <td className="px-3 py-2 font-semibold text-slate-900">{row.customerNo}</td>
+                        <td className="px-3 py-2">{row.customerName}</td>
+                        <td className="px-3 py-2">{row.contact}</td>
+                        <td className="px-3 py-2">{row.fieldOfficer}</td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${
+                            String(row.status).toLowerCase() === 'released'
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                              : 'border-blue-200 bg-blue-50 text-blue-800'
+                          }`}>
+                            {row.status}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">{formatMoney(row.loanAmount)}</td>
+                        <td className="px-3 py-2">{formatMoney(row.refundableAmount)}</td>
+                        <td className="px-3 py-2 text-emerald-700 font-semibold">{formatMoney(row.collectedAmount)}</td>
+                        <td className="px-3 py-2 text-rose-700 font-semibold">{formatMoney(row.pendingAmount)}</td>
+                        <td className="px-3 py-2 text-orange-700 font-semibold">{formatMoney(row.arrearsAmount)}</td>
+                        <td className="px-3 py-2">{formatDate(row.dueDate)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600">
+                <div>
+                  Showing {filteredRows.length === 0 ? 0 : (currentPage - 1) * pageSize + 1}
+                  {' '}
+                  to {Math.min(currentPage * pageSize, filteredRows.length)} of {filteredRows.length}
+                </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rows</label>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value))}
+                    className="px-2 py-1.5 rounded-lg border border-cyan-100 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-200"
+                  >
+                    <option value={10}>10</option>
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage <= 1}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Prev
+                  </button>
+                  <span className="min-w-20 text-center text-slate-700 font-semibold">
+                    {currentPage} / {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={currentPage >= totalPages}
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </>
           )}
         </div>
       </div>

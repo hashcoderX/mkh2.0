@@ -189,30 +189,6 @@ export default function BranchDashboardPage() {
         ],
       },
       {
-        key: 'savings',
-        title: 'Savings and Deposit Related Reports',
-        icon: '💸',
-        gradient: 'from-amber-500 to-orange-500',
-        bg: 'from-amber-50 to-orange-50',
-        reports: [
-          {
-            title: 'Savings Ledger Report',
-            description: 'Savings deposits, withdrawals, and balances by account.',
-            path: withBranch('/dashboard/savings-deposits/reports/ledger'),
-          },
-          {
-            title: 'Deposit Growth Report',
-            description: 'Period-over-period savings and deposit growth summary.',
-            path: withBranch('/dashboard/savings-deposits/reports/deposit-growth'),
-          },
-          {
-            title: 'Maturity Report',
-            description: 'Upcoming and completed deposit maturities.',
-            path: withBranch('/dashboard/savings-deposits/reports/maturity'),
-          },
-        ],
-      },
-      {
         key: 'finance',
         title: 'Finance Management Related Reports',
         icon: '💰',
@@ -262,7 +238,7 @@ export default function BranchDashboardPage() {
     [branchId]
   );
 
-  const collectionOfficerBlockedCategoryKeys = new Set(['mortgage', 'savings', 'finance', 'branch']);
+  const collectionOfficerBlockedCategoryKeys = new Set(['mortgage', 'finance', 'branch']);
   const collectionOfficerBlockedMicrofinanceReportTitles = new Set([
     'Arrears Report',
     'Active Member Report',

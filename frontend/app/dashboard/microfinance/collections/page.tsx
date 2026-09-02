@@ -13,6 +13,17 @@ type LoanRow = {
   customer_no: string;
   customer_code?: string | null;
   customer_name: string;
+  contact_no?: string | null;
+  phone?: string | null;
+  customer?: {
+    first_name?: string | null;
+    last_name?: string | null;
+    customer_code?: string | null;
+    phone?: string | null;
+    contact_no?: string | null;
+    mobile?: string | null;
+    mobile_number?: string | null;
+  } | null;
   loan_scope: 'route_loan' | 'center_loan' | 'direct_loan';
   mf_route_id?: number | string | null;
   route_name?: string | null;
@@ -25,9 +36,11 @@ type LoanRow = {
   refundable_amount: number | string;
   penalty_rate?: number | string | null;
   penalty_grace_days?: number | string | null;
+  loan_request_date?: string | null;
   due_date?: string | null;
   next_payment_date?: string | null;
   loan_end_date?: string | null;
+  created_at?: string | null;
   last_pay_date?: string | null;
   collections_max_collection_date?: string | null;
   refund_option?: 'day' | 'week' | 'month' | string;
@@ -74,6 +87,32 @@ const normalizeCollectionRow = (row: Record<string, unknown>): CollectionRow => 
   collected_amount: row.collected_amount as number | string,
   collection_date: normalizeCollectionDate(row),
 });
+
+const parseDateOnlyParts = (value: string) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  const datePart = raw.includes('T') ? raw.split('T')[0] : raw.slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  return { year, month, day };
+};
+
+const diffDateOnlyInDays = (fromDate: string, toDate: string) => {
+  const from = parseDateOnlyParts(fromDate);
+  const to = parseDateOnlyParts(toDate);
+  if (!from || !to) return null;
+
+  const fromUtc = Date.UTC(from.year, from.month - 1, from.day);
+  const toUtc = Date.UTC(to.year, to.month - 1, to.day);
+  return Math.floor((toUtc - fromUtc) / (1000 * 60 * 60 * 24));
+};
 
 type AuthUser = {
   id: number;
@@ -140,6 +179,17 @@ export default function CollectionManagementPage() {
   });
   const [collectSaving, setCollectSaving] = useState(false);
   const [noticeModal, setNoticeModal] = useState({ open: false, title: '', message: '' });
+  const [confirmModal, setConfirmModal] = useState<{
+    open: boolean;
+    title: string;
+    message: string;
+    action: null | 'submit_collection';
+  }>({
+    open: false,
+    title: '',
+    message: '',
+    action: null,
+  });
   const [loanDetailsModal, setLoanDetailsModal] = useState<{ open: boolean; loan: LoanRow | null }>({
     open: false,
     loan: null,
@@ -330,52 +380,39 @@ export default function CollectionManagementPage() {
     return Math.max(totalPayable - paidTotal, 0);
   };
 
-  const shiftDateByRefundOption = (date: Date, refundOption: string) => {
-    const next = new Date(date);
-
-    if (refundOption === 'day') {
-      next.setDate(next.getDate() + 1);
-      return next;
-    }
-
-    if (refundOption === 'week') {
-      next.setDate(next.getDate() + 7);
-      return next;
-    }
-
-    next.setMonth(next.getMonth() + 1);
-    return next;
+  const getExtraPayment = (loan: LoanRow) => {
+    const storedBalance = Number(loan.arrears_balance || 0);
+    return Math.max(-storedBalance, 0);
   };
 
-  const getProjectedArrearsBalance = (loan: LoanRow) => {
-    let balance = Number(loan.arrears_balance || 0);
-    const installmentAmount = Number(loan.installment_amount || 0);
-    if (installmentAmount <= 0 || !loan.due_date) return balance;
+  const getArrearsAmount = (loan: LoanRow) => {
+    const storedBalance = Number(loan.arrears_balance || 0);
+    return Math.max(storedBalance, 0);
+  };
 
-    let dueCursor = new Date(`${loan.due_date}T00:00:00`);
-    if (Number.isNaN(dueCursor.getTime())) return balance;
+  const getLoanPenaltyAmount = (loan: LoanRow) => {
+    const penaltyRate = Number(loan.penalty_rate ?? 0);
+    const graceDays = Math.max(Number(loan.penalty_grace_days ?? 2), 0);
+    const installmentAmount = Number(loan.installment_amount || 0);
+
+    if (penaltyRate <= 0 || installmentAmount <= 0) return 0;
+    if (getOutstandingBalance(loan) <= 0) return 0;
+
+    const dueDate = String(loan.due_date || '').trim();
+    if (!dueDate) return 0;
+
+    const due = new Date(`${dueDate.slice(0, 10)}T00:00:00`);
+    if (Number.isNaN(due.getTime())) return 0;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const mode = String(loan.refund_option || 'month');
+    const msPerDay = 1000 * 60 * 60 * 24;
+    const dayDiff = Math.floor((today.getTime() - due.getTime()) / msPerDay);
+    if (dayDiff <= graceDays) return 0;
 
-    while (dueCursor <= today) {
-      balance += installmentAmount;
-      dueCursor = shiftDateByRefundOption(dueCursor, mode);
-    }
-
-    return balance;
-  };
-
-  const getExtraPayment = (loan: LoanRow) => {
-    const projectedBalance = getProjectedArrearsBalance(loan);
-    return Math.max(-projectedBalance, 0);
-  };
-
-  const getArrearsAmount = (loan: LoanRow) => {
-    const projectedBalance = getProjectedArrearsBalance(loan);
-    return Math.max(projectedBalance, 0);
+    const lateDays = dayDiff - graceDays;
+    return Math.max((installmentAmount * penaltyRate * lateDays) / 100, 0);
   };
 
   const formatDateDisplay = (value?: string | null) => {
@@ -424,6 +461,42 @@ export default function CollectionManagementPage() {
     return customerNoField || '-';
   };
 
+  const getDisplayCustomerName = (loan: LoanRow) => {
+    const firstName = String(loan.customer?.first_name || '').trim();
+    const lastName = String(loan.customer?.last_name || '').trim();
+    const fullName = `${firstName} ${lastName}`.trim();
+    if (fullName) return fullName;
+
+    const fallbackName = String(loan.customer_name || '').trim();
+    return fallbackName || '-';
+  };
+
+  const resolveCustomerPhone = (loan: LoanRow) => {
+    const rawPhone = [
+      loan.contact_no,
+      loan.phone,
+      loan.customer?.phone,
+      loan.customer?.contact_no,
+      loan.customer?.mobile,
+      loan.customer?.mobile_number,
+    ]
+      .map((value) => String(value || '').trim())
+      .find((value) => value !== '');
+
+    if (!rawPhone) {
+      return { display: '-', dialable: '' };
+    }
+
+    const hasPlusPrefix = rawPhone.startsWith('+');
+    const numericOnly = rawPhone.replace(/\D/g, '');
+    const dialable = `${hasPlusPrefix ? '+' : ''}${numericOnly}`;
+
+    return {
+      display: rawPhone,
+      dialable: dialable.length > 0 ? dialable : '',
+    };
+  };
+
   const scopeType = activeMode === 'center' ? 'center_loan' : activeMode === 'route' ? 'route_loan' : null;
 
   const commonFinderResults = useMemo(() => {
@@ -464,9 +537,10 @@ export default function CollectionManagementPage() {
       if (scopeType && loan.loan_scope !== scopeType) return false;
       if (!keyword) return true;
 
-      const haystack = [
+        const haystack = [
         loan.customer_no || '',
-        loan.customer_name || '',
+          getDisplayCustomerName(loan),
+          loan.customer_name || '',
         loan.route?.name || loan.route_name || '',
         loan.center?.name || '',
         loan.group?.name || '',
@@ -748,7 +822,7 @@ export default function CollectionManagementPage() {
     if (!keyword) return rows;
 
     return rows.filter((loan) => {
-      const haystack = [loan.customer_no, loan.customer_name, loan.group?.name || '']
+      const haystack = [loan.customer_no, getDisplayCustomerName(loan), loan.customer_name, loan.group?.name || '']
         .join(' ')
         .toLowerCase();
       return haystack.includes(keyword);
@@ -768,7 +842,7 @@ export default function CollectionManagementPage() {
     if (!keyword) return rows;
 
     return rows.filter((loan) => {
-      const haystack = [loan.customer_no, loan.customer_name, loan.route?.name || loan.route_name || '']
+      const haystack = [loan.customer_no, getDisplayCustomerName(loan), loan.customer_name, loan.route?.name || loan.route_name || '']
         .join(' ')
         .toLowerCase();
       return haystack.includes(keyword);
@@ -896,8 +970,8 @@ export default function CollectionManagementPage() {
       open: true,
       loanId: loan.id,
       loanCode: getFinderLoanCode(loan),
-      customerName: loan.customer_name,
-      amount: Number(loan.installment_amount || 0).toFixed(2),
+      customerName: getDisplayCustomerName(loan),
+      amount: '',
       paymentType: 'cash',
       paymentReference: '',
       installmentAmount: Number(loan.installment_amount || 0),
@@ -940,26 +1014,25 @@ export default function CollectionManagementPage() {
       return { lateDays: 0, penaltyAmount: 0 };
     }
 
-    if (!collectModal.dueDate || !collectModal.date || collectModal.penaltyRate <= 0) {
+    const installmentAmount = Number(collectModal.installmentAmount || 0);
+    const penaltyRate = Number(collectModal.penaltyRate || 0);
+    const graceDays = Math.max(Number(collectModal.graceDays || 0), 0);
+
+    if (!collectModal.dueDate || !collectModal.date || penaltyRate <= 0 || installmentAmount <= 0) {
       return { lateDays: 0, penaltyAmount: 0 };
     }
 
-    const dueDate = new Date(`${collectModal.dueDate}T00:00:00`);
-    const payDate = new Date(`${collectModal.date}T00:00:00`);
-
-    if (Number.isNaN(dueDate.getTime()) || Number.isNaN(payDate.getTime())) {
+    const dayDiff = diffDateOnlyInDays(collectModal.dueDate, collectModal.date);
+    if (dayDiff === null) {
       return { lateDays: 0, penaltyAmount: 0 };
     }
 
-    const msPerDay = 1000 * 60 * 60 * 24;
-    const dayDiff = Math.floor((payDate.getTime() - dueDate.getTime()) / msPerDay);
-
-    if (dayDiff <= collectModal.graceDays) {
+    if (dayDiff <= graceDays) {
       return { lateDays: 0, penaltyAmount: 0 };
     }
 
-    const lateDays = dayDiff - collectModal.graceDays;
-    const penaltyAmount = (collectModal.installmentAmount * collectModal.penaltyRate * lateDays) / 100;
+    const lateDays = dayDiff - graceDays;
+    const penaltyAmount = (installmentAmount * penaltyRate * lateDays) / 100;
 
     return {
       lateDays,
@@ -1077,6 +1150,24 @@ export default function CollectionManagementPage() {
     }
   };
 
+  const requestCollectionConfirmation = () => {
+    setConfirmModal({
+      open: true,
+      title: 'Confirm Collection',
+      message: 'Are you sure you want to save this collection?',
+      action: 'submit_collection',
+    });
+  };
+
+  const runConfirmAction = () => {
+    const action = confirmModal.action;
+    setConfirmModal({ open: false, title: '', message: '', action: null });
+
+    if (action === 'submit_collection') {
+      submitCollection();
+    }
+  };
+
   const modeMeta =
     activeMode === 'center'
       ? {
@@ -1189,7 +1280,7 @@ export default function CollectionManagementPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-cyan-50 to-blue-100 p-6 relative overflow-hidden">
+    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-cyan-50 to-blue-100 p-4 md:p-6 relative overflow-hidden">
       <div className="pointer-events-none absolute inset-0 opacity-50">
         <div className="absolute -top-20 left-16 h-72 w-72 rounded-full bg-emerald-300 blur-3xl"></div>
         <div className="absolute top-24 right-4 h-80 w-80 rounded-full bg-cyan-300 blur-3xl"></div>
@@ -1258,7 +1349,7 @@ export default function CollectionManagementPage() {
         <div className="bg-white/86 backdrop-blur-xl rounded-3xl border border-cyan-100 shadow-[0_18px_40px_-24px_rgba(14,116,144,0.5)] p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-lg font-bold text-slate-900">Common Loan Finder</h2>
-            <div className="relative min-w-[280px]">
+            <div className="relative w-full sm:min-w-[280px] sm:w-auto">
               <input
                 className="w-full pl-9 pr-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-black focus:outline-none focus:ring-2 focus:ring-cyan-200"
                 placeholder="Find by Customer No"
@@ -1274,7 +1365,7 @@ export default function CollectionManagementPage() {
           ) : commonFinderResults.length === 0 ? (
             <p className="mt-3 text-sm text-rose-600">No loan found for this customer number.</p>
           ) : (
-            <div className="mt-3 overflow-x-auto rounded-2xl border border-cyan-100">
+            <div className="mt-3 overflow-x-auto rounded-2xl border border-cyan-100 pb-1 [scrollbar-width:thin] [scrollbar-color:rgba(14,116,144,0.55)_rgba(6,182,212,0.12)] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-cyan-50 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-cyan-400/70">
               <table className="min-w-full text-sm text-left text-slate-700 bg-white">
                 <thead className="bg-cyan-50/70 text-slate-700">
                   <tr>
@@ -1284,6 +1375,7 @@ export default function CollectionManagementPage() {
                     <th className="px-3 py-2 font-semibold">Scope</th>
                     <th className="px-3 py-2 font-semibold">Installment</th>
                     <th className="px-3 py-2 font-semibold">Outstanding</th>
+                    <th className="px-3 py-2 font-semibold">Penalty</th>
                     <th className="px-3 py-2 font-semibold">Due Date</th>
                     <th className="px-3 py-2 font-semibold">Loan End Date</th>
                     <th className="px-3 py-2 font-semibold">Action</th>
@@ -1296,10 +1388,11 @@ export default function CollectionManagementPage() {
                         <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{getFinderLoanCode(loan)}</span>
                       </td>
                       <td className="px-3 py-2">{getFinderCustomerNo(loan)}</td>
-                      <td className="px-3 py-2">{loan.customer_name}</td>
+                      <td className="px-3 py-2">{getDisplayCustomerName(loan)}</td>
                       <td className="px-3 py-2 capitalize">{String(loan.loan_scope || '-').replace('_', ' ')}</td>
                       <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
                       <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
+                      <td className="px-3 py-2 text-fuchsia-700 font-semibold">{getLoanPenaltyAmount(loan).toFixed(2)}</td>
                       <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>
                       <td className="px-3 py-2">{formatDateDisplay(loan.loan_end_date)}</td>
                       <td className="px-3 py-2">
@@ -1383,39 +1476,41 @@ export default function CollectionManagementPage() {
               </button>
             )}
             {activeMode === 'office' && isAdmin && (
-              <div className="inline-flex rounded-xl border border-cyan-200 bg-cyan-50 p-1">
-                <button
-                  type="button"
-                  onClick={() => setOfficeView('all')}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                    officeView === 'all' ? 'bg-white text-cyan-800 shadow-sm' : 'text-cyan-700'
-                  }`}
-                >
-                  All Active Loans
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setOfficeView('today_debt')}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                    officeView === 'today_debt' ? 'bg-white text-cyan-800 shadow-sm' : 'text-cyan-700'
-                  }`}
-                >
-                  Debt Today
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const tomorrow = new Date();
-                    tomorrow.setDate(tomorrow.getDate() + 1);
-                    setDebtTargetDate(tomorrow.toISOString().slice(0, 10));
-                    setOfficeView('date_debt');
-                  }}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                    officeView === 'date_debt' ? 'bg-white text-cyan-800 shadow-sm' : 'text-cyan-700'
-                  }`}
-                >
-                  Next Day
-                </button>
+              <div className="w-full md:w-auto overflow-x-auto [scrollbar-width:thin] [scrollbar-color:rgba(14,116,144,0.55)_rgba(6,182,212,0.12)] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-cyan-50 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-cyan-400/70">
+                <div className="inline-flex min-w-max rounded-xl border border-cyan-200 bg-cyan-50 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setOfficeView('all')}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                      officeView === 'all' ? 'bg-white text-cyan-800 shadow-sm' : 'text-cyan-700'
+                    }`}
+                  >
+                    All Active Loans
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOfficeView('today_debt')}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                      officeView === 'today_debt' ? 'bg-white text-cyan-800 shadow-sm' : 'text-cyan-700'
+                    }`}
+                  >
+                    Debt Today
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const tomorrow = new Date();
+                      tomorrow.setDate(tomorrow.getDate() + 1);
+                      setDebtTargetDate(tomorrow.toISOString().slice(0, 10));
+                      setOfficeView('date_debt');
+                    }}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                      officeView === 'date_debt' ? 'bg-white text-cyan-800 shadow-sm' : 'text-cyan-700'
+                    }`}
+                  >
+                    Next Day
+                  </button>
+                </div>
               </div>
             )}
             {activeMode === 'office' && isAdmin && officeView === 'date_debt' && (
@@ -1443,7 +1538,7 @@ export default function CollectionManagementPage() {
                 />
               </div>
             )}
-            <div className="relative min-w-[260px]">
+            <div className="relative w-full lg:max-w-[720px]">
               <div className="mb-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <select
                   className="px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-black focus:outline-none focus:ring-2 focus:ring-cyan-200"
@@ -1549,7 +1644,7 @@ export default function CollectionManagementPage() {
                   : 'No records found for this collection mode.'}
             </div>
           ) : (
-            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100">
+            <div className="mt-4 overflow-x-auto rounded-2xl border border-cyan-100 pb-1 [scrollbar-width:thin] [scrollbar-color:rgba(14,116,144,0.55)_rgba(6,182,212,0.12)] [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-cyan-50 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-cyan-400/70">
               <table className="min-w-full text-sm text-left text-slate-700 bg-white">
                 {activeMode === 'center' ? (
                   <>
@@ -1564,6 +1659,7 @@ export default function CollectionManagementPage() {
                           <th className="px-3 py-2 font-semibold">Paid Total</th>
                           <th className="px-3 py-2 font-semibold">Outstanding</th>
                           <th className="px-3 py-2 font-semibold">Arrears</th>
+                          <th className="px-3 py-2 font-semibold">Penalty</th>
                           <th className="px-3 py-2 font-semibold">Extra Payment</th>
                           <th className="px-3 py-2 font-semibold">Due Date</th>
                           <th className="px-3 py-2 font-semibold">Next Payment</th>
@@ -1600,12 +1696,13 @@ export default function CollectionManagementPage() {
                                 <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
                               </td>
                               <td className="px-3 py-2">{loan.customer_no || '-'}</td>
-                              <td className="px-3 py-2">{loan.customer_name}</td>
+                              <td className="px-3 py-2">{getDisplayCustomerName(loan)}</td>
                               <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>
                               <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
                               <td className="px-3 py-2 text-emerald-700 font-semibold">{getPaidTotal(loan.id).toFixed(2)}</td>
                               <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
                               <td className="px-3 py-2 text-red-700 font-semibold">{getArrearsAmount(loan).toFixed(2)}</td>
+                              <td className="px-3 py-2 text-fuchsia-700 font-semibold">{getLoanPenaltyAmount(loan).toFixed(2)}</td>
                               <td className="px-3 py-2 text-violet-700 font-semibold">{getExtraPayment(loan).toFixed(2)}</td>
                               <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>
                               <td className="px-3 py-2">{formatDateDisplay(loan.next_payment_date)}</td>
@@ -1675,6 +1772,7 @@ export default function CollectionManagementPage() {
                           <th className="px-3 py-2 font-semibold">Paid Total</th>
                           <th className="px-3 py-2 font-semibold">Outstanding</th>
                           <th className="px-3 py-2 font-semibold">Arrears</th>
+                          <th className="px-3 py-2 font-semibold">Penalty</th>
                           <th className="px-3 py-2 font-semibold">Extra Payment</th>
                           <th className="px-3 py-2 font-semibold">Due Date</th>
                           <th className="px-3 py-2 font-semibold">Next Payment</th>
@@ -1702,13 +1800,14 @@ export default function CollectionManagementPage() {
                                 <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
                               </td>
                               <td className="px-3 py-2">{loan.customer_no || '-'}</td>
-                              <td className="px-3 py-2">{loan.customer_name}</td>
+                              <td className="px-3 py-2">{getDisplayCustomerName(loan)}</td>
                               <td className="px-3 py-2">{loan.center?.name || '-'}</td>
                               <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>
                               <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
                               <td className="px-3 py-2 text-emerald-700 font-semibold">{getPaidTotal(loan.id).toFixed(2)}</td>
                               <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
                               <td className="px-3 py-2 text-red-700 font-semibold">{getArrearsAmount(loan).toFixed(2)}</td>
+                              <td className="px-3 py-2 text-fuchsia-700 font-semibold">{getLoanPenaltyAmount(loan).toFixed(2)}</td>
                               <td className="px-3 py-2 text-violet-700 font-semibold">{getExtraPayment(loan).toFixed(2)}</td>
                               <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>
                               <td className="px-3 py-2">{formatDateDisplay(loan.next_payment_date)}</td>
@@ -1757,6 +1856,7 @@ export default function CollectionManagementPage() {
                         <th className="px-3 py-2 font-semibold">Paid Total</th>
                         <th className="px-3 py-2 font-semibold">Outstanding</th>
                         <th className="px-3 py-2 font-semibold">Arrears</th>
+                        <th className="px-3 py-2 font-semibold">Penalty</th>
                         <th className="px-3 py-2 font-semibold">Extra Payment</th>
                         <th className="px-3 py-2 font-semibold">Due Date</th>
                         <th className="px-3 py-2 font-semibold">Next Payment</th>
@@ -1774,7 +1874,7 @@ export default function CollectionManagementPage() {
                             <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
                           </td>
                           <td className="px-3 py-2">{loan.customer_no || '-'}</td>
-                          <td className="px-3 py-2">{loan.customer_name}</td>
+                          <td className="px-3 py-2">{getDisplayCustomerName(loan)}</td>
                           <td className="px-3 py-2">{loan.route?.name || loan.route_name || '-'}</td>
                           <td className="px-3 py-2">{loan.center?.name || '-'}</td>
                           <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>
@@ -1782,6 +1882,7 @@ export default function CollectionManagementPage() {
                           <td className="px-3 py-2 text-emerald-700 font-semibold">{getPaidTotal(loan.id).toFixed(2)}</td>
                           <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
                           <td className="px-3 py-2 text-red-700 font-semibold">{getArrearsAmount(loan).toFixed(2)}</td>
+                          <td className="px-3 py-2 text-fuchsia-700 font-semibold">{getLoanPenaltyAmount(loan).toFixed(2)}</td>
                           <td className="px-3 py-2 text-violet-700 font-semibold">{getExtraPayment(loan).toFixed(2)}</td>
                           <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>
                           <td className="px-3 py-2">{formatDateDisplay(loan.next_payment_date)}</td>
@@ -1802,7 +1903,7 @@ export default function CollectionManagementPage() {
 
         {collectModal.open && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 backdrop-blur-sm px-4 py-6">
-            <div className="w-full max-w-2xl overflow-hidden rounded-3xl border border-emerald-100 bg-white shadow-[0_30px_90px_-35px_rgba(15,23,42,0.75)]">
+            <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-3xl border border-emerald-100 bg-white shadow-[0_30px_90px_-35px_rgba(15,23,42,0.75)]">
               <div className="relative bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 px-5 py-5 text-white">
                 <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-white/20 blur-2xl"></div>
                 <p className="text-[11px] uppercase tracking-[0.18em] text-white/85">Collection Desk</p>
@@ -1901,7 +2002,7 @@ export default function CollectionManagementPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={submitCollection}
+                  onClick={requestCollectionConfirmation}
                   disabled={collectSaving}
                   className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-sm font-semibold disabled:opacity-60"
                 >
@@ -1914,14 +2015,17 @@ export default function CollectionManagementPage() {
 
         {loanDetailsModal.open && loanDetailsModal.loan && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 backdrop-blur-sm px-4 py-6">
-            <div className="w-full max-w-4xl overflow-hidden rounded-3xl border border-cyan-100 bg-white shadow-[0_30px_90px_-35px_rgba(15,23,42,0.75)]">
+            <div className="w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-3xl border border-cyan-100 bg-white shadow-[0_30px_90px_-35px_rgba(15,23,42,0.75)]">
               <div className="relative bg-gradient-to-r from-cyan-600 via-sky-500 to-blue-500 px-5 py-5 text-white">
                 <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-white/20 blur-2xl"></div>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-[11px] uppercase tracking-[0.18em] text-white/85">Loan Intelligence Card</p>
                     <h3 className="text-xl font-extrabold mt-1">Loan Details</h3>
-                    <p className="text-sm text-white/90 mt-1">{loanDetailsModal.loan.customer_name} | {loanDetailsModal.loan.customer_no}</p>
+                    <p className="text-sm text-white/90 mt-1">{getDisplayCustomerName(loanDetailsModal.loan)} | {loanDetailsModal.loan.customer_no}</p>
+                    <p className="text-xs text-white/90 mt-1">
+                      Loan Code: <span className="font-semibold">{getFinderLoanCode(loanDetailsModal.loan)}</span>
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -1932,6 +2036,9 @@ export default function CollectionManagementPage() {
                   </button>
                 </div>
                 <div className="mt-3 flex gap-2 flex-wrap">
+                  <span className="inline-flex rounded-full bg-white/20 px-3 py-1 text-xs font-semibold uppercase tracking-wide">
+                    {getFinderLoanCode(loanDetailsModal.loan)}
+                  </span>
                   <span className="inline-flex rounded-full bg-white/20 px-3 py-1 text-xs font-semibold uppercase tracking-wide">{loanDetailsModal.loan.loan_scope}</span>
                   <span className="inline-flex rounded-full bg-emerald-400/25 px-3 py-1 text-xs font-semibold uppercase tracking-wide">{loanDetailsModal.loan.status}</span>
                 </div>
@@ -1939,6 +2046,29 @@ export default function CollectionManagementPage() {
 
               <div className="p-5 bg-gradient-to-b from-cyan-50/35 to-white">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm text-slate-700">
+                  <div className="rounded-xl border border-sky-100 bg-sky-50/60 p-3"><p className="text-xs text-sky-700">Loan Code</p><p className="font-extrabold text-sky-900">{getFinderLoanCode(loanDetailsModal.loan)}</p></div>
+                  <div className="rounded-xl border border-teal-100 bg-teal-50/60 p-3"><p className="text-xs text-teal-700">Customer Name</p><p className="font-semibold text-teal-900">{getDisplayCustomerName(loanDetailsModal.loan)}</p></div>
+                  <div className="rounded-xl border border-cyan-100 bg-cyan-50/60 p-3"><p className="text-xs text-cyan-700">Customer No</p><p className="font-semibold text-cyan-900">{loanDetailsModal.loan.customer_no || '-'}</p></div>
+                  <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-3"><p className="text-xs text-blue-700">Customer Code</p><p className="font-semibold text-blue-900">{loanDetailsModal.loan.customer_code || '-'}</p></div>
+                  <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
+                    <p className="text-xs text-indigo-700">Customer Phone</p>
+                    {(() => {
+                      const phoneMeta = resolveCustomerPhone(loanDetailsModal.loan as LoanRow);
+                      if (!phoneMeta.dialable) {
+                        return <p className="font-semibold text-indigo-900">-</p>;
+                      }
+
+                      return (
+                        <a
+                          href={`tel:${phoneMeta.dialable}`}
+                          className="font-semibold text-indigo-900 underline decoration-indigo-300 underline-offset-2 hover:text-indigo-700"
+                        >
+                          {phoneMeta.display}
+                        </a>
+                      );
+                    })()}
+                  </div>
+
                   <div className="rounded-xl border border-cyan-100 bg-white p-3"><p className="text-xs text-slate-500">Route</p><p className="font-semibold">{loanDetailsModal.loan.route?.name || loanDetailsModal.loan.route_name || '-'}</p></div>
                   <div className="rounded-xl border border-cyan-100 bg-white p-3"><p className="text-xs text-slate-500">Center</p><p className="font-semibold">{loanDetailsModal.loan.center?.name || '-'}</p></div>
                   <div className="rounded-xl border border-cyan-100 bg-white p-3"><p className="text-xs text-slate-500">Group</p><p className="font-semibold">{loanDetailsModal.loan.group?.name || '-'}</p></div>
@@ -1952,6 +2082,7 @@ export default function CollectionManagementPage() {
                   <div className="rounded-xl border border-amber-100 bg-amber-50/60 p-3"><p className="text-xs text-amber-700">Arrears</p><p className="font-extrabold text-amber-700">{getArrearsAmount(loanDetailsModal.loan).toFixed(2)}</p></div>
 
                   <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-3"><p className="text-xs text-violet-700">Extra Payment</p><p className="font-extrabold text-violet-700">{getExtraPayment(loanDetailsModal.loan).toFixed(2)}</p></div>
+                  <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-3"><p className="text-xs text-emerald-700">Loan Start Date</p><p className="font-semibold text-emerald-900">{formatDateDisplay(loanDetailsModal.loan.loan_request_date || loanDetailsModal.loan.created_at || null)}</p></div>
                   <div className="rounded-xl border border-cyan-100 bg-white p-3"><p className="text-xs text-slate-500">Due Date</p><p className="font-semibold">{formatDateDisplay(loanDetailsModal.loan.due_date)}</p></div>
                   <div className="rounded-xl border border-cyan-100 bg-white p-3"><p className="text-xs text-slate-500">Next Payment Date</p><p className="font-semibold">{formatDateDisplay(loanDetailsModal.loan.next_payment_date)}</p></div>
                   <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
@@ -2000,6 +2131,31 @@ export default function CollectionManagementPage() {
                   className="px-4 py-2 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 text-white text-sm font-semibold"
                 >
                   OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {confirmModal.open && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/55 px-4">
+            <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl border border-cyan-100">
+              <h3 className="text-lg font-bold text-slate-900">{confirmModal.title}</h3>
+              <p className="mt-2 text-sm text-slate-600 whitespace-pre-line">{confirmModal.message}</p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmModal({ open: false, title: '', message: '', action: null })}
+                  className="px-4 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={runConfirmAction}
+                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 text-white text-sm font-semibold"
+                >
+                  Yes, Confirm
                 </button>
               </div>
             </div>

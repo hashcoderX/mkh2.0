@@ -275,6 +275,15 @@ export default function MicrofinanceDashboard() {
       permissionTokens: ['not paid customer report', '/dashboard/microfinance/reports/not-paid-customers'],
     },
     {
+      name: 'Next Collection Report',
+      icon: '📅',
+      color: 'from-sky-500 to-cyan-500',
+      bgColor: 'from-sky-50 to-cyan-50',
+      description: 'Check next-day collections by filtering loans using next collection date.',
+      path: '/dashboard/microfinance/reports/next-collection-report',
+      permissionTokens: ['next collection report', '/dashboard/microfinance/reports/next-collection-report'],
+    },
+    {
       name: 'Year End Summary Report',
       icon: '🗓️',
       color: 'from-violet-500 to-indigo-500',

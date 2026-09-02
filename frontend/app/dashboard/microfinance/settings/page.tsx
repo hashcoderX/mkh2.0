@@ -43,13 +43,27 @@ type LoanLifecycleRow = {
   loan_code?: string | null;
   customer_no?: string | null;
   customer_name?: string | null;
+  customer?: {
+    first_name?: string | null;
+    last_name?: string | null;
+    customer_code?: string | null;
+    phone?: string | null;
+  } | null;
   field_officer?: string | null;
   status?: string | null;
   refund_option?: 'day' | 'week' | 'month' | string | null;
+  loan_amount?: number | string | null;
+  refundable_amount?: number | string | null;
   installment_amount?: number | string | null;
+  loan_request_date?: string | null;
   due_date?: string | null;
   next_payment_date?: string | null;
+  loan_end_date?: string | null;
+  contact_no?: string | null;
   arrears_balance?: number | string | null;
+  route?: { id?: number; name?: string; code?: string } | null;
+  center?: { id?: number; name?: string; code?: string } | null;
+  group?: { id?: number; name?: string; code?: string } | null;
 };
 
 type TabType = 'routes' | 'groups' | 'centers' | 'penalty' | 'loan_lifecycle';
@@ -368,6 +382,23 @@ export default function MicrofinanceSettingsPage() {
     return Math.max(balance, 0);
   };
 
+  const formatAmount = (value?: number | string | null) => Number(value || 0).toFixed(2);
+
+  const getDisplayCustomerName = (loan: LoanLifecycleRow) => {
+    const firstName = String(loan.customer?.first_name || '').trim();
+    const lastName = String(loan.customer?.last_name || '').trim();
+    const fullName = `${firstName} ${lastName}`.trim();
+    if (fullName) return fullName;
+
+    const fallback = String(loan.customer_name || '').trim();
+    return fallback || '-';
+  };
+
+  const getDisplayCustomerPhone = (loan: LoanLifecycleRow) => {
+    const phone = String(loan.contact_no || loan.customer?.phone || '').trim();
+    return phone || '-';
+  };
+
   const filteredLoanLifecycleRows = useMemo(() => {
     const keyword = lifecycleSearch.trim().toLowerCase();
 
@@ -385,7 +416,13 @@ export default function MicrofinanceSettingsPage() {
       const haystack = [
         loan.loan_code || `LR-${loan.id}`,
         loan.customer_no || '',
+        loan.customer?.customer_code || '',
+        loan.customer?.first_name || '',
+        loan.customer?.last_name || '',
         loan.customer_name || '',
+        loan.route?.name || '',
+        loan.center?.name || '',
+        loan.group?.name || '',
         loan.field_officer || '',
         status,
       ]
@@ -770,8 +807,16 @@ export default function MicrofinanceSettingsPage() {
                   <tr>
                     <th className="px-3 py-2 font-semibold">Loan Code</th>
                     <th className="px-3 py-2 font-semibold">Customer No</th>
+                    <th className="px-3 py-2 font-semibold">Customer Code</th>
                     <th className="px-3 py-2 font-semibold">Customer</th>
+                    <th className="px-3 py-2 font-semibold">Contact</th>
                     <th className="px-3 py-2 font-semibold">Field Officer</th>
+                    <th className="px-3 py-2 font-semibold">Route</th>
+                    <th className="px-3 py-2 font-semibold">Center</th>
+                    <th className="px-3 py-2 font-semibold">Group</th>
+                    <th className="px-3 py-2 font-semibold">Loan Amount</th>
+                    <th className="px-3 py-2 font-semibold">Installment</th>
+                    <th className="px-3 py-2 font-semibold">Loan Start</th>
                     <th className="px-3 py-2 font-semibold">Status</th>
                     <th className="px-3 py-2 font-semibold">Due Date</th>
                     <th className="px-3 py-2 font-semibold">Next Payment</th>
@@ -787,8 +832,16 @@ export default function MicrofinanceSettingsPage() {
                       <tr key={loan.id} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40">
                         <td className="px-3 py-2 font-semibold text-slate-900">{loan.loan_code || `LR-${loan.id}`}</td>
                         <td className="px-3 py-2">{loan.customer_no || '-'}</td>
-                        <td className="px-3 py-2">{loan.customer_name || '-'}</td>
+                        <td className="px-3 py-2">{loan.customer?.customer_code || '-'}</td>
+                        <td className="px-3 py-2">{getDisplayCustomerName(loan)}</td>
+                        <td className="px-3 py-2">{getDisplayCustomerPhone(loan)}</td>
                         <td className="px-3 py-2">{loan.field_officer || '-'}</td>
+                        <td className="px-3 py-2">{loan.route?.name || '-'}</td>
+                        <td className="px-3 py-2">{loan.center?.name || '-'}</td>
+                        <td className="px-3 py-2">{loan.group?.name || '-'}</td>
+                        <td className="px-3 py-2">{formatAmount(loan.loan_amount)}</td>
+                        <td className="px-3 py-2">{formatAmount(loan.installment_amount)}</td>
+                        <td className="px-3 py-2">{formatDate(loan.loan_request_date)}</td>
                         <td className="px-3 py-2 capitalize">{status || '-'}</td>
                         <td className="px-3 py-2">{formatDate(loan.due_date)}</td>
                         <td className="px-3 py-2">{formatDate(loan.next_payment_date)}</td>
@@ -820,14 +873,14 @@ export default function MicrofinanceSettingsPage() {
                   })}
                   {!filteredLoanLifecycleRows.length && !lifecycleLoading && (
                     <tr>
-                      <td className="px-3 py-5 text-center text-slate-500" colSpan={9}>
+                      <td className="px-3 py-5 text-center text-slate-500" colSpan={17}>
                         No loans match the selected filters.
                       </td>
                     </tr>
                   )}
                   {lifecycleLoading && (
                     <tr>
-                      <td className="px-3 py-5 text-center text-slate-500" colSpan={9}>
+                      <td className="px-3 py-5 text-center text-slate-500" colSpan={17}>
                         Loading loans...
                       </td>
                     </tr>
@@ -885,7 +938,7 @@ export default function MicrofinanceSettingsPage() {
                 {lifecycleModal.action === 'hold' ? 'Put Loan On Hold' : 'Close Loan'}
               </h3>
               <p className="mt-2 text-sm text-slate-600">
-                Loan: {lifecycleModal.loan.loan_code || `LR-${lifecycleModal.loan.id}`} â€¢ Customer: {lifecycleModal.loan.customer_name || '-'}
+                Loan: {lifecycleModal.loan.loan_code || `LR-${lifecycleModal.loan.id}`} â€¢ Customer: {getDisplayCustomerName(lifecycleModal.loan)}
               </p>
               <textarea
                 className="mt-3 w-full rounded-xl border border-cyan-100 bg-white px-3 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-cyan-200"

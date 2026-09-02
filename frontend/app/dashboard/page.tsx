@@ -103,7 +103,6 @@ export default function Dashboard() {
   const moduleAliases: Record<string, string[]> = {
     hrm: ['hr', 'hrm', 'human resource management', 'employee', 'employees', 'department', 'designation', 'attendance', 'leave', 'payroll', 'candidate'],
     credit: ['credit', 'finance', 'finances', 'finance product types', 'loan requests', 'loan request', 'microfinance', 'mortgages', 'mortgage', 'customers', 'customer'],
-    savings: ['savings', 'savings accounts', 'deposit', 'deposits'],
     branches: ['branch', 'branches', 'company', 'companies'],
     reports: ['report', 'reports', 'ledger', 'snapshot', 'arrears', 'portfolio'],
   };
@@ -244,15 +243,6 @@ export default function Dashboard() {
         'user management',
       ],
       requiredPermissionKeywords: ['hrm', 'employee', 'employees', 'department', 'departments', 'attendance', 'leave', 'leaves', 'payroll', 'candidate', 'candidates', 'roles', 'permissions'],
-    },
-    {
-      name: 'Savings & Deposits',
-      icon: '💸',
-      color: 'from-yellow-500 to-orange-500',
-      bgColor: 'from-yellow-50 to-orange-50',
-      path: '/dashboard/savings-deposits',
-      requiredModules: ['savings accounts'],
-      requiredPermissionKeywords: ['savings', 'savings_accounts', 'deposit', 'withdraw'],
     },
     {
       name: 'Branch Management',
