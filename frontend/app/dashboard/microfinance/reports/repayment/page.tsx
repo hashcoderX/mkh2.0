@@ -14,6 +14,7 @@ type LoanRow = {
   status?: string | null;
   refundable_amount?: number | string | null;
   loan_amount?: number | string | null;
+  loan_balance?: number | string | null;
   due_date?: string | null;
   next_payment_date?: string | null;
 };
@@ -32,7 +33,7 @@ type RepaymentRow = {
   loanAmount: number;
   refundableAmount: number;
   collectedAmount: number;
-  pendingAmount: number;
+  outstandingAmount: number;
   repaymentRate: number;
   dueDate: string;
   nextPaymentDate: string;
@@ -41,6 +42,49 @@ type RepaymentRow = {
 };
 
 const API_BASE = 'http://localhost:8000/api';
+
+const parseDateOnlyParts = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  const datePart = raw.includes('T') ? raw.split('T')[0] : raw.slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+
+  return { year, month, day };
+};
+
+const normalizeDateOnly = (value?: string | null) => {
+  const parts = parseDateOnlyParts(value);
+  if (!parts) return '';
+  const year = String(parts.year).padStart(4, '0');
+  const month = String(parts.month).padStart(2, '0');
+  const day = String(parts.day).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const diffDateOnlyInDays = (fromDate: string, toDate: string) => {
+  const from = parseDateOnlyParts(fromDate);
+  const to = parseDateOnlyParts(toDate);
+  if (!from || !to) return null;
+
+  const fromUtc = Date.UTC(from.year, from.month - 1, from.day);
+  const toUtc = Date.UTC(to.year, to.month - 1, to.day);
+  return Math.floor((toUtc - fromUtc) / (1000 * 60 * 60 * 24));
+};
+
+const getTodayDateOnly = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 export default function RepaymentReportPage() {
   const router = useRouter();
@@ -100,8 +144,7 @@ export default function RepaymentReportPage() {
           paidByLoan.set(loanId, (paidByLoan.get(loanId) || 0) + Number(collection.collected_amount || 0));
         });
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const todayDateOnly = getTodayDateOnly();
 
         const mapped: RepaymentRow[] = loans
           .filter((loan) => {
@@ -112,14 +155,29 @@ export default function RepaymentReportPage() {
             const loanId = Number(loan.id || 0);
             const refundableAmount = Number(loan.refundable_amount || 0);
             const collectedAmount = paidByLoan.get(loanId) || 0;
-            const pendingAmount = Math.max(refundableAmount - collectedAmount, 0);
+            const fallbackOutstandingAmount = Math.max(refundableAmount - collectedAmount, 0);
+            const rawLoanBalance = loan.loan_balance;
+            const hasLoanBalance =
+              rawLoanBalance !== null &&
+              typeof rawLoanBalance !== 'undefined' &&
+              String(rawLoanBalance).trim() !== '';
+            const loanBalance = Number(rawLoanBalance);
+            const outstandingAmount =
+              hasLoanBalance && Number.isFinite(loanBalance)
+                ? Math.max(loanBalance, 0)
+                : fallbackOutstandingAmount;
             const repaymentRate = refundableAmount > 0 ? (collectedAmount / refundableAmount) * 100 : 0;
 
-            const dueDateText = String(loan.due_date || '').slice(0, 10);
-            const dueDate = dueDateText ? new Date(`${dueDateText}T00:00:00`) : null;
+            const dueDateText = normalizeDateOnly(loan.due_date);
+            const nextPaymentDateText = normalizeDateOnly(loan.next_payment_date);
+            const effectiveDueDateText = dueDateText || nextPaymentDateText;
+            const dayDiff =
+              effectiveDueDateText && outstandingAmount > 0
+                ? diffDateOnlyInDays(effectiveDueDateText, todayDateOnly)
+                : null;
             const overdueDays =
-              dueDate && !Number.isNaN(dueDate.getTime()) && pendingAmount > 0
-                ? Math.max(Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)), 0)
+              dayDiff !== null && outstandingAmount > 0
+                ? Math.max(dayDiff, 0)
                 : 0;
 
             let repaymentStatus: RepaymentRow['repaymentStatus'] = 'good';
@@ -137,16 +195,16 @@ export default function RepaymentReportPage() {
               loanAmount: Number(loan.loan_amount || 0),
               refundableAmount,
               collectedAmount,
-              pendingAmount,
+              outstandingAmount,
               repaymentRate,
-              dueDate: dueDateText || '-',
-              nextPaymentDate: String(loan.next_payment_date || '').slice(0, 10) || '-',
+              dueDate: effectiveDueDateText || '-',
+              nextPaymentDate: nextPaymentDateText || '-',
               overdueDays,
               repaymentStatus,
             };
           })
-          .filter((row) => row.pendingAmount > 0)
-          .sort((a, b) => b.pendingAmount - a.pendingAmount);
+          .filter((row) => row.outstandingAmount > 0)
+          .sort((a, b) => b.outstandingAmount - a.outstandingAmount);
 
         setRows(mapped);
       } catch {
@@ -184,7 +242,7 @@ export default function RepaymentReportPage() {
         acc.loanAmount += row.loanAmount;
         acc.refundable += row.refundableAmount;
         acc.collected += row.collectedAmount;
-        acc.pending += row.pendingAmount;
+        acc.outstanding += row.outstandingAmount;
         acc.repaymentRate += row.repaymentRate;
         if (row.repaymentStatus === 'excellent') acc.excellent += 1;
         if (row.repaymentStatus === 'good') acc.good += 1;
@@ -197,7 +255,7 @@ export default function RepaymentReportPage() {
         loanAmount: 0,
         refundable: 0,
         collected: 0,
-        pending: 0,
+        outstanding: 0,
         repaymentRate: 0,
         excellent: 0,
         good: 0,
@@ -235,7 +293,7 @@ export default function RepaymentReportPage() {
       'Loan Amount',
       'Refundable Amount',
       'Collected Amount',
-      'Pending Amount',
+      'Outstanding Amount',
       'Repayment Rate (%)',
       'Due Date',
       'Next Payment Date',
@@ -260,7 +318,7 @@ export default function RepaymentReportPage() {
       formatMoney(row.loanAmount),
       formatMoney(row.refundableAmount),
       formatMoney(row.collectedAmount),
-      formatMoney(row.pendingAmount),
+      formatMoney(row.outstandingAmount),
       row.repaymentRate.toFixed(2),
       formatDate(row.dueDate),
       formatDate(row.nextPaymentDate),
@@ -306,7 +364,7 @@ export default function RepaymentReportPage() {
         'Officer',
         'Refundable',
         'Collected',
-        'Pending',
+        'Outstanding',
         'Rate %',
         'Overdue Days',
         'Status',
@@ -318,7 +376,7 @@ export default function RepaymentReportPage() {
         row.fieldOfficer,
         formatMoney(row.refundableAmount),
         formatMoney(row.collectedAmount),
-        formatMoney(row.pendingAmount),
+        formatMoney(row.outstandingAmount),
         row.repaymentRate.toFixed(2),
         row.overdueDays,
         row.repaymentStatus,
@@ -397,9 +455,9 @@ export default function RepaymentReportPage() {
               </p>
             </div>
             <div className="rounded-2xl bg-gradient-to-br from-rose-500 to-red-600 border border-rose-300/40 shadow-md p-4 text-white">
-              <p className="text-xs uppercase tracking-wide text-rose-100">Pending</p>
+              <p className="text-xs uppercase tracking-wide text-rose-100">Outstanding</p>
               <p className="text-[14px] font-extrabold mt-1">
-                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.pending)}
+                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.outstanding)}
               </p>
             </div>
             <div className="rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 border border-violet-300/40 shadow-md p-4 text-white">
@@ -489,7 +547,7 @@ export default function RepaymentReportPage() {
                     <th className="px-3 py-2 font-semibold">Loan Status</th>
                     <th className="px-3 py-2 font-semibold">Refundable</th>
                     <th className="px-3 py-2 font-semibold">Collected</th>
-                    <th className="px-3 py-2 font-semibold">Pending</th>
+                    <th className="px-3 py-2 font-semibold">Outstanding</th>
                     <th className="px-3 py-2 font-semibold">Repayment %</th>
                     <th className="px-3 py-2 font-semibold">Due Date</th>
                     <th className="px-3 py-2 font-semibold">Next Payment</th>
@@ -507,7 +565,7 @@ export default function RepaymentReportPage() {
                       <td className="px-3 py-2 capitalize">{row.loanStatus}</td>
                       <td className="px-3 py-2">{formatMoney(row.refundableAmount)}</td>
                       <td className="px-3 py-2 text-emerald-700 font-semibold">{formatMoney(row.collectedAmount)}</td>
-                      <td className="px-3 py-2 text-rose-700 font-semibold">{formatMoney(row.pendingAmount)}</td>
+                      <td className="px-3 py-2 text-rose-700 font-semibold">{formatMoney(row.outstandingAmount)}</td>
                       <td className="px-3 py-2 font-semibold text-indigo-700">{row.repaymentRate.toFixed(2)}%</td>
                       <td className="px-3 py-2">{formatDate(row.dueDate)}</td>
                       <td className="px-3 py-2">{formatDate(row.nextPaymentDate)}</td>

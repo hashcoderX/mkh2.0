@@ -36,6 +36,7 @@ type LoanRow = {
   refundable_amount: number | string;
   penalty_rate?: number | string | null;
   penalty_grace_days?: number | string | null;
+  terms_count?: number | string | null;
   loan_request_date?: string | null;
   due_date?: string | null;
   next_payment_date?: string | null;
@@ -114,6 +115,168 @@ const diffDateOnlyInDays = (fromDate: string, toDate: string) => {
   return Math.floor((toUtc - fromUtc) / (1000 * 60 * 60 * 24));
 };
 
+const parseDateOnlyToUtc = (value?: string | null) => {
+  const parts = parseDateOnlyParts(String(value || ''));
+  if (!parts) return null;
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+};
+
+const shiftDateByRefundOptionUtc = (date: Date, refundOption: string, steps = 1) => {
+  const shifted = new Date(date.getTime());
+  const normalizedOption = String(refundOption || 'month').toLowerCase();
+
+  if (normalizedOption === 'day') {
+    shifted.setUTCDate(shifted.getUTCDate() + steps);
+    return shifted;
+  }
+
+  if (normalizedOption === 'week') {
+    shifted.setUTCDate(shifted.getUTCDate() + steps * 7);
+    return shifted;
+  }
+
+  shifted.setUTCMonth(shifted.getUTCMonth() + steps);
+  return shifted;
+};
+
+const resolveArrearsCursorUtc = ({
+  dueDate,
+  nextPaymentDate,
+  loanEndDate,
+  lastPayDate,
+  refundOption,
+  termsCount,
+}: {
+  dueDate?: string | null;
+  nextPaymentDate?: string | null;
+  loanEndDate?: string | null;
+  lastPayDate?: string | null;
+  refundOption?: string | null;
+  termsCount?: number;
+}) => {
+  const dueCursor = parseDateOnlyToUtc(dueDate);
+  if (dueCursor) return dueCursor;
+
+  const nextPaymentCursor = parseDateOnlyToUtc(nextPaymentDate);
+  if (nextPaymentCursor) return nextPaymentCursor;
+
+  const lastPayCursor = parseDateOnlyToUtc(lastPayDate);
+  if (lastPayCursor) {
+    return shiftDateByRefundOptionUtc(lastPayCursor, String(refundOption || 'month'), 1);
+  }
+
+  const loanEndCursor = parseDateOnlyToUtc(loanEndDate);
+  if (!loanEndCursor) return null;
+
+  const safeTermsCount = Math.max(Number(termsCount || 1), 1);
+  if (safeTermsCount <= 1) return loanEndCursor;
+
+  return shiftDateByRefundOptionUtc(loanEndCursor, String(refundOption || 'month'), 0 - (safeTermsCount - 1));
+};
+
+const calculateAccruedArrearsBalance = ({
+  installmentAmount,
+  refundOption,
+  termsCount,
+  dueDate,
+  nextPaymentDate,
+  loanEndDate,
+  lastPayDate,
+  storedBalance,
+  asOfDate,
+}: {
+  installmentAmount: number;
+  refundOption?: string | null;
+  termsCount?: number;
+  dueDate?: string | null;
+  nextPaymentDate?: string | null;
+  loanEndDate?: string | null;
+  lastPayDate?: string | null;
+  storedBalance: number;
+  asOfDate: string;
+}) => {
+  if (!Number.isFinite(installmentAmount) || installmentAmount <= 0) {
+    return Number.isFinite(storedBalance) ? storedBalance : 0;
+  }
+
+  const asOfCursor = parseDateOnlyToUtc(asOfDate);
+  if (!asOfCursor) {
+    return Number.isFinite(storedBalance) ? storedBalance : 0;
+  }
+
+  let capDate = asOfCursor;
+  const endDate = parseDateOnlyToUtc(loanEndDate);
+  if (endDate && endDate.getTime() < capDate.getTime()) {
+    capDate = endDate;
+  }
+
+  let dueCursor = resolveArrearsCursorUtc({
+    dueDate,
+    nextPaymentDate,
+    loanEndDate,
+    lastPayDate,
+    refundOption,
+    termsCount,
+  });
+
+  let balance = Number.isFinite(storedBalance) ? storedBalance : 0;
+  if (!dueCursor) {
+    return balance;
+  }
+
+  let guard = 0;
+  while (dueCursor.getTime() <= capDate.getTime()) {
+    balance += installmentAmount;
+    dueCursor = shiftDateByRefundOptionUtc(dueCursor, String(refundOption || 'month'), 1);
+    guard += 1;
+
+    if (guard > 5000) {
+      break;
+    }
+  }
+
+  return Math.round(balance * 100) / 100;
+};
+
+const getTodayDateOnly = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const calculatePenaltyEstimate = ({
+  dueDate,
+  paymentDate,
+  arrearsAmount,
+  penaltyRate,
+  graceDays,
+}: {
+  dueDate: string;
+  paymentDate: string;
+  arrearsAmount: number;
+  penaltyRate: number;
+  graceDays: number;
+}) => {
+  if (!dueDate || !paymentDate || penaltyRate <= 0 || arrearsAmount <= 0) {
+    return { lateDays: 0, penaltyAssessed: 0 };
+  }
+
+  const dayDiff = diffDateOnlyInDays(dueDate, paymentDate);
+  if (dayDiff === null || dayDiff <= graceDays) {
+    return { lateDays: 0, penaltyAssessed: 0 };
+  }
+
+  const lateDays = dayDiff - graceDays;
+  const penaltyAssessed = Math.max((arrearsAmount * penaltyRate) / 100, 0);
+
+  return {
+    lateDays,
+    penaltyAssessed,
+  };
+};
+
 type AuthUser = {
   id: number;
   name?: string;
@@ -158,6 +321,12 @@ export default function CollectionManagementPage() {
     paymentReference: string;
     installmentAmount: number;
     dueDate: string;
+    nextPaymentDate: string;
+    loanEndDate: string;
+    refundOption: string;
+    termsCount: number;
+    storedArrearsBalance: number;
+    lastPayDate: string;
     penaltyRate: number;
     graceDays: number;
     note: string;
@@ -172,10 +341,16 @@ export default function CollectionManagementPage() {
     paymentReference: '',
     installmentAmount: 0,
     dueDate: '',
+    nextPaymentDate: '',
+    loanEndDate: '',
+    refundOption: 'month',
+    termsCount: 1,
+    storedArrearsBalance: 0,
+    lastPayDate: '',
     penaltyRate: 0,
     graceDays: 0,
     note: '',
-    date: new Date().toISOString().split('T')[0],
+    date: getTodayDateOnly(),
   });
   const [collectSaving, setCollectSaving] = useState(false);
   const [noticeModal, setNoticeModal] = useState({ open: false, title: '', message: '' });
@@ -374,45 +549,87 @@ export default function CollectionManagementPage() {
 
     return lastPayDateByLoan.get(loan.id) || null;
   };
+
+  const liveArrearsBalanceByLoan = useMemo(() => {
+    const map = new Map<number, number>();
+    const todayDateOnly = getTodayDateOnly();
+
+    scopedLoans.forEach((loan) => {
+      const paidTotal = paidTotalByLoan.get(loan.id) || 0;
+      const outstandingBalance = Math.max(Number(loan.refundable_amount || 0) - paidTotal, 0);
+
+      if (outstandingBalance <= 0) {
+        map.set(loan.id, 0);
+        return;
+      }
+
+      const liveBalance = calculateAccruedArrearsBalance({
+        installmentAmount: Number(loan.installment_amount || 0),
+        refundOption: loan.refund_option,
+        termsCount: Number(loan.terms_count || 1),
+        dueDate: loan.due_date,
+        nextPaymentDate: loan.next_payment_date,
+        loanEndDate: loan.loan_end_date,
+        lastPayDate: getLastPayDate(loan),
+        storedBalance: Number(loan.arrears_balance || 0),
+        asOfDate: todayDateOnly,
+      });
+
+      map.set(loan.id, liveBalance);
+    });
+
+    return map;
+  }, [scopedLoans, paidTotalByLoan, lastPayDateByLoan]);
+
   const getOutstandingBalance = (loan: LoanRow) => {
     const totalPayable = Number(loan.refundable_amount || 0);
     const paidTotal = getPaidTotal(loan.id);
     return Math.max(totalPayable - paidTotal, 0);
   };
 
+  const getLoanRowClassName = (loan: LoanRow, isClickable = false) => {
+    const isSettled = getOutstandingBalance(loan) <= 0.009;
+    const isPaidToday = getLastPayDate(loan) === getTodayDateOnly();
+    const toneClass = isSettled
+      || isPaidToday
+      ? 'bg-emerald-50/60 hover:bg-emerald-100/70 border-l-2 border-l-emerald-700/55'
+      : 'bg-rose-50/55 hover:bg-rose-100/70 border-l-2 border-l-rose-700/60';
+
+    return `border-b border-cyan-100 last:border-b-0 transition-colors${isClickable ? ' cursor-pointer' : ''} ${toneClass}`;
+  };
+
   const getExtraPayment = (loan: LoanRow) => {
-    const storedBalance = Number(loan.arrears_balance || 0);
-    return Math.max(-storedBalance, 0);
+    const liveBalance = liveArrearsBalanceByLoan.get(loan.id);
+    const effectiveBalance = Number.isFinite(liveBalance) ? Number(liveBalance) : Number(loan.arrears_balance || 0);
+    return Math.max(-effectiveBalance, 0);
   };
 
   const getArrearsAmount = (loan: LoanRow) => {
-    const storedBalance = Number(loan.arrears_balance || 0);
-    return Math.max(storedBalance, 0);
+    const liveBalance = liveArrearsBalanceByLoan.get(loan.id);
+    const effectiveBalance = Number.isFinite(liveBalance) ? Number(liveBalance) : Number(loan.arrears_balance || 0);
+    return Math.max(effectiveBalance, 0);
   };
 
   const getLoanPenaltyAmount = (loan: LoanRow) => {
     const penaltyRate = Number(loan.penalty_rate ?? 0);
     const graceDays = Math.max(Number(loan.penalty_grace_days ?? 2), 0);
-    const installmentAmount = Number(loan.installment_amount || 0);
+    const arrearsAmount = getArrearsAmount(loan);
 
-    if (penaltyRate <= 0 || installmentAmount <= 0) return 0;
+    if (penaltyRate <= 0 || arrearsAmount <= 0) return 0;
     if (getOutstandingBalance(loan) <= 0) return 0;
 
     const dueDate = String(loan.due_date || '').trim();
     if (!dueDate) return 0;
 
-    const due = new Date(`${dueDate.slice(0, 10)}T00:00:00`);
-    if (Number.isNaN(due.getTime())) return 0;
+    const estimate = calculatePenaltyEstimate({
+      dueDate,
+      paymentDate: getTodayDateOnly(),
+      arrearsAmount,
+      penaltyRate,
+      graceDays,
+    });
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const msPerDay = 1000 * 60 * 60 * 24;
-    const dayDiff = Math.floor((today.getTime() - due.getTime()) / msPerDay);
-    if (dayDiff <= graceDays) return 0;
-
-    const lateDays = dayDiff - graceDays;
-    return Math.max((installmentAmount * penaltyRate * lateDays) / 100, 0);
+    return estimate.penaltyAssessed;
   };
 
   const formatDateDisplay = (value?: string | null) => {
@@ -854,7 +1071,7 @@ export default function CollectionManagementPage() {
     [filteredLoans]
   );
 
-  const todayDate = new Date().toISOString().slice(0, 10);
+  const todayDate = getTodayDateOnly();
   const officeDebtDate =
     officeView === 'today_debt' ? todayDate : officeView === 'date_debt' ? debtTargetDate : null;
 
@@ -965,6 +1182,7 @@ export default function CollectionManagementPage() {
   const openCollectModal = (loan: LoanRow) => {
     const graceDays = Number(loan.penalty_grace_days ?? 2);
     const penaltyRate = Number(loan.penalty_rate ?? 0);
+    const lastPayDate = getLastPayDate(loan) || '';
 
     setCollectModal({
       open: true,
@@ -976,10 +1194,16 @@ export default function CollectionManagementPage() {
       paymentReference: '',
       installmentAmount: Number(loan.installment_amount || 0),
       dueDate: loan.due_date || '',
+      nextPaymentDate: loan.next_payment_date || '',
+      loanEndDate: loan.loan_end_date || '',
+      refundOption: String(loan.refund_option || 'month'),
+      termsCount: Math.max(Number(loan.terms_count || 1), 1),
+      storedArrearsBalance: Number(loan.arrears_balance || 0),
+      lastPayDate,
       penaltyRate: Number.isFinite(penaltyRate) ? penaltyRate : 0,
       graceDays: Number.isFinite(graceDays) && graceDays >= 0 ? graceDays : 0,
       note: '',
-      date: new Date().toISOString().split('T')[0],
+      date: getTodayDateOnly(),
     });
   };
 
@@ -1002,49 +1226,65 @@ export default function CollectionManagementPage() {
       paymentReference: '',
       installmentAmount: 0,
       dueDate: '',
+      nextPaymentDate: '',
+      loanEndDate: '',
+      refundOption: 'month',
+      termsCount: 1,
+      storedArrearsBalance: 0,
+      lastPayDate: '',
       penaltyRate: 0,
       graceDays: 0,
       note: '',
-      date: new Date().toISOString().split('T')[0],
+      date: getTodayDateOnly(),
     });
   };
 
   const penaltyPreview = useMemo(() => {
     if (!collectModal.open) {
-      return { lateDays: 0, penaltyAmount: 0 };
+      return { lateDays: 0, penaltyAmount: 0, arrearsAmount: 0 };
     }
 
-    const installmentAmount = Number(collectModal.installmentAmount || 0);
     const penaltyRate = Number(collectModal.penaltyRate || 0);
     const graceDays = Math.max(Number(collectModal.graceDays || 0), 0);
+    const projectedArrearsBalance = calculateAccruedArrearsBalance({
+      installmentAmount: Number(collectModal.installmentAmount || 0),
+      refundOption: collectModal.refundOption,
+      termsCount: collectModal.termsCount,
+      dueDate: collectModal.dueDate,
+      nextPaymentDate: collectModal.nextPaymentDate,
+      loanEndDate: collectModal.loanEndDate,
+      lastPayDate: collectModal.lastPayDate,
+      storedBalance: Number(collectModal.storedArrearsBalance || 0),
+      asOfDate: collectModal.date || getTodayDateOnly(),
+    });
+    const arrearsAmount = Math.max(projectedArrearsBalance, 0);
 
-    if (!collectModal.dueDate || !collectModal.date || penaltyRate <= 0 || installmentAmount <= 0) {
-      return { lateDays: 0, penaltyAmount: 0 };
-    }
-
-    const dayDiff = diffDateOnlyInDays(collectModal.dueDate, collectModal.date);
-    if (dayDiff === null) {
-      return { lateDays: 0, penaltyAmount: 0 };
-    }
-
-    if (dayDiff <= graceDays) {
-      return { lateDays: 0, penaltyAmount: 0 };
-    }
-
-    const lateDays = dayDiff - graceDays;
-    const penaltyAmount = (installmentAmount * penaltyRate * lateDays) / 100;
+    const estimate = calculatePenaltyEstimate({
+      dueDate: collectModal.dueDate,
+      paymentDate: collectModal.date,
+      arrearsAmount,
+      penaltyRate,
+      graceDays,
+    });
 
     return {
-      lateDays,
-      penaltyAmount,
+      lateDays: estimate.lateDays,
+      penaltyAmount: estimate.penaltyAssessed,
+      arrearsAmount,
     };
   }, [
     collectModal.open,
+    collectModal.installmentAmount,
+    collectModal.refundOption,
+    collectModal.termsCount,
     collectModal.dueDate,
+    collectModal.nextPaymentDate,
+    collectModal.loanEndDate,
+    collectModal.lastPayDate,
+    collectModal.storedArrearsBalance,
     collectModal.date,
     collectModal.penaltyRate,
     collectModal.graceDays,
-    collectModal.installmentAmount,
   ]);
 
   const submitCollection = async () => {
@@ -1383,7 +1623,7 @@ export default function CollectionManagementPage() {
                 </thead>
                 <tbody>
                   {commonFinderResults.map((loan) => (
-                    <tr key={`finder-${loan.id}`} className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors">
+                    <tr key={`finder-${loan.id}`} className={getLoanRowClassName(loan)}>
                       <td className="px-3 py-2 font-semibold text-slate-900">
                         <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{getFinderLoanCode(loan)}</span>
                       </td>
@@ -1690,7 +1930,7 @@ export default function CollectionManagementPage() {
                             <tr
                               key={`loan-${loan.id}`}
                               onClick={() => openLoanDetailsModal(loan)}
-                              className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors cursor-pointer"
+                              className={getLoanRowClassName(loan, true)}
                             >
                               <td className="px-3 py-2 font-semibold text-slate-900">
                                 <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
@@ -1794,7 +2034,7 @@ export default function CollectionManagementPage() {
                             <tr
                               key={`route-loan-${loan.id}`}
                               onClick={() => openLoanDetailsModal(loan)}
-                              className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors cursor-pointer"
+                              className={getLoanRowClassName(loan, true)}
                             >
                               <td className="px-3 py-2 font-semibold text-slate-900">
                                 <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
@@ -1868,7 +2108,7 @@ export default function CollectionManagementPage() {
                         <tr
                           key={loan.id}
                           onClick={() => openLoanDetailsModal(loan)}
-                          className="border-b border-cyan-100 last:border-b-0 hover:bg-cyan-50/40 transition-colors cursor-pointer"
+                          className={getLoanRowClassName(loan, true)}
                         >
                           <td className="px-3 py-2 font-semibold text-slate-900">
                             <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-xs text-slate-700">{loan.loan_code || '-'}</span>
@@ -1912,7 +2152,7 @@ export default function CollectionManagementPage() {
               </div>
 
               <div className="p-5 space-y-4 text-black bg-gradient-to-b from-emerald-50/35 to-white">
-                <div className="grid grid-cols-2 md:grid-cols-5 gap-2 rounded-2xl border border-emerald-100 bg-white p-3 text-xs">
+                <div className="grid grid-cols-2 md:grid-cols-6 gap-2 rounded-2xl border border-emerald-100 bg-white p-3 text-xs">
                   <div>
                     <p className="uppercase text-slate-500">Due Date</p>
                     <p className="font-semibold text-slate-800">{formatDateDisplay(collectModal.dueDate)}</p>
@@ -1928,6 +2168,10 @@ export default function CollectionManagementPage() {
                   <div>
                     <p className="uppercase text-slate-500">Late Days</p>
                     <p className="font-semibold text-slate-800">{penaltyPreview.lateDays}</p>
+                  </div>
+                  <div>
+                    <p className="uppercase text-slate-500">Arrears Base</p>
+                    <p className="font-semibold text-slate-800">{penaltyPreview.arrearsAmount.toFixed(2)}</p>
                   </div>
                   <div className="col-span-2 md:col-span-1">
                     <p className="uppercase text-slate-500">Est. Penalty</p>

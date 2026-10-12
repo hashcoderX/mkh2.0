@@ -13,6 +13,7 @@ type LoanRow = {
   customer_name?: string | null;
   field_officer?: string | null;
   due_date?: string | null;
+  next_payment_date?: string | null;
   installment_amount?: number | string | null;
   refundable_amount?: number | string | null;
   arrears_balance?: number | string | null;
@@ -53,12 +54,17 @@ type LoanSummaryRow = {
   customerNo: string;
   customerName: string;
   fieldOfficer: string;
+  installmentAmount: number;
+  refundableAmount: number;
+  outstandingAmount: number;
   transactionCount: number;
   collected: number;
   capital: number;
   interest: number;
   penalty: number;
   arrears: number;
+  dueDate: string;
+  nextPaymentDate: string;
   lastPaymentDate: string;
 };
 
@@ -260,12 +266,17 @@ export default function CustomerPaymentHistoryReportPage() {
           customerNo: String(loan.customer_no || '-'),
           customerName: String(loan.customer_name || '-'),
           fieldOfficer: String(loan.field_officer || 'Unassigned'),
+          installmentAmount: installment,
+          refundableAmount,
+          outstandingAmount: pendingAmount,
           transactionCount: matchedHistory.length,
           collected: totals.collected,
           capital: totals.capital,
           interest: totals.interest,
           penalty: totals.penalty,
           arrears,
+          dueDate: dueDateText || '',
+          nextPaymentDate: String(loan.next_payment_date || '').slice(0, 10),
           lastPaymentDate,
         };
       })
@@ -367,6 +378,24 @@ export default function CustomerPaymentHistoryReportPage() {
       minute: '2-digit',
       second: '2-digit',
       hour12: false,
+    }).format(parsed);
+  };
+
+  const formatDateOnly = (value: string) => {
+    const parsedMs = parseDateMs(value);
+    if (Number.isNaN(parsedMs)) {
+      return value || '-';
+    }
+
+    const parsed = new Date(parsedMs);
+    if (Number.isNaN(parsed.getTime())) {
+      return value || '-';
+    }
+
+    return new Intl.DateTimeFormat('en-LK', {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
     }).format(parsed);
   };
 
@@ -514,6 +543,34 @@ export default function CustomerPaymentHistoryReportPage() {
 
     autoTable(doc, {
       startY: 72,
+      head: [['Field', 'Value', 'Field', 'Value']],
+      body: [
+        ['Loan Code', selectedLoan.loanCode, 'Customer No', selectedLoan.customerNo],
+        ['Customer', selectedLoan.customerName, 'Field Officer', selectedLoan.fieldOfficer],
+        ['Installment', formatMoney(selectedLoan.installmentAmount), 'Refundable', formatMoney(selectedLoan.refundableAmount)],
+        ['Outstanding', formatMoney(selectedLoan.outstandingAmount), 'Arrears', formatMoney(selectedLoan.arrears)],
+        ['Collected', formatMoney(selectedLoan.collected), 'Capital', formatMoney(selectedLoan.capital)],
+        ['Interest', formatMoney(selectedLoan.interest), 'Penalty', formatMoney(selectedLoan.penalty)],
+        ['Due Date', formatDateOnly(selectedLoan.dueDate), 'Next Payment', formatDateOnly(selectedLoan.nextPaymentDate)],
+        ['Transactions', String(selectedLoan.transactionCount), 'Last Payment', formatDateTime(selectedLoan.lastPaymentDate)],
+      ],
+      styles: {
+        fontSize: 8,
+        cellPadding: 4,
+      },
+      headStyles: {
+        fillColor: [8, 47, 73],
+        textColor: [255, 255, 255],
+      },
+      margin: { left: 24, right: 24, top: 72, bottom: 24 },
+      theme: 'grid',
+    });
+
+    const detailTableEndY =
+      (doc as jsPDF & { lastAutoTable?: { finalY?: number } }).lastAutoTable?.finalY ?? 130;
+
+    autoTable(doc, {
+      startY: detailTableEndY + 14,
       head: [[
         'Date & Time',
         'Pay Type',
@@ -784,6 +841,57 @@ export default function CustomerPaymentHistoryReportPage() {
               </div>
 
               <div className="p-4 md:p-5">
+                <div className="mb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 rounded-2xl border border-cyan-100 bg-cyan-50/25 p-3">
+                  <div className="rounded-xl border border-cyan-100 bg-white p-2">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Installment</p>
+                    <p className="font-semibold text-slate-900 tabular-nums">{formatMoney(selectedLoan.installmentAmount)}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-100 bg-white p-2">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Refundable</p>
+                    <p className="font-semibold text-slate-900 tabular-nums">{formatMoney(selectedLoan.refundableAmount)}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-100 bg-white p-2">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Outstanding</p>
+                    <p className="font-semibold text-rose-700 tabular-nums">{formatMoney(selectedLoan.outstandingAmount)}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-100 bg-white p-2">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Arrears</p>
+                    <p className="font-semibold text-orange-700 tabular-nums">{formatMoney(selectedLoan.arrears)}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-100 bg-white p-2">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Collected</p>
+                    <p className="font-semibold text-cyan-700 tabular-nums">{formatMoney(selectedLoan.collected)}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-100 bg-white p-2">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Capital</p>
+                    <p className="font-semibold text-emerald-700 tabular-nums">{formatMoney(selectedLoan.capital)}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-100 bg-white p-2">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Profit (I+P)</p>
+                    <p className="font-semibold text-slate-900 tabular-nums">{formatMoney(selectedLoan.interest + selectedLoan.penalty)}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-100 bg-white p-2">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Penalty</p>
+                    <p className="font-semibold text-fuchsia-700 tabular-nums">{formatMoney(selectedLoan.penalty)}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-100 bg-white p-2">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Due Date</p>
+                    <p className="font-semibold text-slate-900">{formatDateOnly(selectedLoan.dueDate)}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-100 bg-white p-2">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Next Payment</p>
+                    <p className="font-semibold text-slate-900">{formatDateOnly(selectedLoan.nextPaymentDate)}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-100 bg-white p-2">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Last Payment</p>
+                    <p className="font-semibold text-slate-900">{formatDateTime(selectedLoan.lastPaymentDate)}</p>
+                  </div>
+                  <div className="rounded-xl border border-cyan-100 bg-white p-2">
+                    <p className="text-[11px] uppercase tracking-wide text-slate-500">Transactions</p>
+                    <p className="font-semibold text-slate-900">{selectedLoan.transactionCount}</p>
+                  </div>
+                </div>
+
                 {selectedLoanHistoryRows.length === 0 ? (
                   <div className="rounded-2xl border border-cyan-100 bg-cyan-50/40 p-6 text-center text-sm text-slate-600">
                     No payment history available for this loan.

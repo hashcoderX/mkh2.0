@@ -14,6 +14,7 @@ type LoanRow = {
   field_officer?: string | null;
   status?: string | null;
   loan_amount?: number | string | null;
+  loan_balance?: number | string | null;
   refundable_amount?: number | string | null;
   installment_amount?: number | string | null;
   arrears_balance?: number | string | null;
@@ -45,21 +46,49 @@ type ReportRow = {
 
 const API_BASE = 'http://localhost:8000/api';
 
+const getTodayDateOnly = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getTomorrowDateOnly = () => {
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const year = tomorrow.getFullYear();
+  const month = String(tomorrow.getMonth() + 1).padStart(2, '0');
+  const day = String(tomorrow.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const normalizeDateOnly = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  const datePart = raw.includes('T') ? raw.split('T')[0] : raw.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(datePart) ? datePart : '';
+};
+
+const normalizeText = (value: string) =>
+  String(value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
+
 export default function NextCollectionReportPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<ReportRow[]>([]);
+  const [officerOptions, setOfficerOptions] = useState<string[]>([]);
   const [keyword, setKeyword] = useState('');
   const [officerFilter, setOfficerFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [nextCollectionDate, setNextCollectionDate] = useState(() => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    return tomorrow.toISOString().slice(0, 10);
-  });
+  const [nextCollectionDate, setNextCollectionDate] = useState(() => getTomorrowDateOnly());
 
   const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
 
@@ -103,6 +132,20 @@ export default function NextCollectionReportPage() {
         const loans: LoanRow[] = Array.isArray(loanRes.data) ? loanRes.data : [];
         const collections: CollectionRow[] = Array.isArray(collectionRes.data) ? collectionRes.data : [];
 
+        const activeLoans = loans.filter((loan) => {
+          const status = String(loan.status || '').toLowerCase();
+          return status === 'approved' || status === 'released' || status === 'completed';
+        });
+
+        const officers = Array.from(
+          new Set(
+            activeLoans
+              .map((loan) => String(loan.field_officer || '').trim())
+              .filter((name) => name !== '')
+          )
+        ).sort((a, b) => a.localeCompare(b));
+        setOfficerOptions(officers);
+
         const paidByLoan = new Map<number, number>();
         collections.forEach((collection) => {
           const loanId = Number(collection.mf_loan_request_id || 0);
@@ -110,23 +153,32 @@ export default function NextCollectionReportPage() {
           paidByLoan.set(loanId, (paidByLoan.get(loanId) || 0) + Number(collection.collected_amount || 0));
         });
 
-        const mapped = loans
-          .filter((loan) => {
-            const status = String(loan.status || '').toLowerCase();
-            return status === 'approved' || status === 'released' || status === 'completed';
-          })
+        const mapped = activeLoans
           .map((loan) => {
             const loanId = Number(loan.id || 0);
             const refundableAmount = Number(loan.refundable_amount || 0);
             const collectedAmount = paidByLoan.get(loanId) || 0;
-            const outstandingAmount = Math.max(refundableAmount - collectedAmount, 0);
+            const fallbackOutstandingAmount = Math.max(refundableAmount - collectedAmount, 0);
+            const rawLoanBalance = loan.loan_balance;
+            const hasLoanBalance =
+              rawLoanBalance !== null &&
+              typeof rawLoanBalance !== 'undefined' &&
+              String(rawLoanBalance).trim() !== '';
+            const loanBalance = Number(rawLoanBalance);
+            const outstandingAmount =
+              hasLoanBalance && Number.isFinite(loanBalance)
+                ? Math.max(loanBalance, 0)
+                : fallbackOutstandingAmount;
+            const dueDate = normalizeDateOnly(loan.due_date);
+            const nextPaymentDate = normalizeDateOnly(loan.next_payment_date);
+            const targetNextCollectionDate = nextPaymentDate || dueDate;
 
             return {
               loanId,
               loanCode: String(loan.loan_code || '').trim() || `LR-${loanId}`,
               customerNo: String(loan.customer_no || '-'),
               customerName: String(loan.customer_name || '-'),
-              fieldOfficer: String(loan.field_officer || 'Unassigned'),
+              fieldOfficer: String(loan.field_officer || 'Unassigned').trim() || 'Unassigned',
               status: String(loan.status || '-'),
               loanAmount: Number(loan.loan_amount || 0),
               installmentAmount: Number(loan.installment_amount || 0),
@@ -134,8 +186,8 @@ export default function NextCollectionReportPage() {
               collectedAmount,
               outstandingAmount,
               arrearsAmount: Math.max(Number(loan.arrears_balance || 0), 0),
-              dueDate: String(loan.due_date || '').slice(0, 10) || '-',
-              nextCollectionDate: String(loan.next_payment_date || '').slice(0, 10) || '-',
+              dueDate: dueDate || '-',
+              nextCollectionDate: targetNextCollectionDate || '-',
             } as ReportRow;
           })
           .filter((row) => row.nextCollectionDate !== '-' && row.nextCollectionDate === nextCollectionDate)
@@ -145,6 +197,7 @@ export default function NextCollectionReportPage() {
         setRows(mapped);
       } catch {
         setRows([]);
+        setOfficerOptions([]);
       } finally {
         setLoading(false);
       }
@@ -153,15 +206,12 @@ export default function NextCollectionReportPage() {
     loadReport();
   }, [token, branchId, nextCollectionDate]);
 
-  const officerOptions = useMemo(() => {
-    return Array.from(new Set(rows.map((row) => row.fieldOfficer))).sort((a, b) => a.localeCompare(b));
-  }, [rows]);
-
   const filteredRows = useMemo(() => {
     const search = keyword.trim().toLowerCase();
+    const normalizedOfficerFilter = normalizeText(officerFilter);
 
     return rows.filter((row) => {
-      if (officerFilter !== 'all' && row.fieldOfficer.toLowerCase() !== officerFilter) {
+      if (officerFilter !== 'all' && normalizeText(row.fieldOfficer) !== normalizedOfficerFilter) {
         return false;
       }
 
@@ -401,7 +451,7 @@ export default function NextCollectionReportPage() {
               >
                 <option value="all">All Officers</option>
                 {officerOptions.map((officer) => (
-                  <option key={officer} value={officer.toLowerCase()}>
+                  <option key={officer} value={officer}>
                     {officer}
                   </option>
                 ))}

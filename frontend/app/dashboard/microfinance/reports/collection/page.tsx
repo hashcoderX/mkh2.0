@@ -14,6 +14,15 @@ type LoanRow = {
   field_officer?: string | null;
   loan_amount?: number | string | null;
   net_disbursed_amount?: number | string | null;
+  loan_balance?: number | string | null;
+  installment_amount?: number | string | null;
+  terms_count?: number | string | null;
+  refund_option?: 'day' | 'week' | 'month' | string | null;
+  loan_end_date?: string | null;
+  due_date?: string | null;
+  next_payment_date?: string | null;
+  penalty_rate?: number | string | null;
+  penalty_grace_days?: number | string | null;
 };
 
 type CollectionRow = {
@@ -35,17 +44,20 @@ type CollectionRow = {
     field_officer?: string | null;
     loan_amount?: number | string | null;
     net_disbursed_amount?: number | string | null;
+    loan_balance?: number | string | null;
   } | null;
 };
 
 type ReportRow = {
   id: number;
+  loanRequestId: number;
   date: string;
   loanCode: string;
   customerNo: string;
   customerName: string;
   fieldOfficer: string;
   loanAmount: number;
+  investmentAmount: number;
   collected: number;
   capital: number;
   interest: number;
@@ -55,6 +67,144 @@ type ReportRow = {
 };
 
 const API_BASE = 'http://localhost:8000/api';
+
+const parseDateOnlyParts = (value?: string | null) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  const datePart = raw.includes('T') ? raw.split('T')[0] : raw.slice(0, 10);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+
+  return { year, month, day };
+};
+
+const parseDateOnlyToUtc = (value?: string | null) => {
+  const parts = parseDateOnlyParts(value);
+  if (!parts) return null;
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+};
+
+const shiftDateByRefundOptionUtc = (date: Date, refundOption: string, steps = 1) => {
+  const shifted = new Date(date.getTime());
+  const normalizedOption = String(refundOption || 'month').toLowerCase();
+
+  if (normalizedOption === 'day') {
+    shifted.setUTCDate(shifted.getUTCDate() + steps);
+    return shifted;
+  }
+
+  if (normalizedOption === 'week') {
+    shifted.setUTCDate(shifted.getUTCDate() + steps * 7);
+    return shifted;
+  }
+
+  shifted.setUTCMonth(shifted.getUTCMonth() + steps);
+  return shifted;
+};
+
+const resolveFirstDueDateFromLoan = (loan: LoanRow) => {
+  const refundOption = String(loan.refund_option || 'month');
+  const termCount = Math.max(Number(loan.terms_count || 1), 1);
+
+  const loanEndDate = parseDateOnlyToUtc(loan.loan_end_date);
+  if (loanEndDate) {
+    if (termCount <= 1) return loanEndDate;
+    return shiftDateByRefundOptionUtc(loanEndDate, refundOption, 0 - (termCount - 1));
+  }
+
+  const nextPaymentDate = parseDateOnlyToUtc(loan.next_payment_date);
+  if (nextPaymentDate) return nextPaymentDate;
+
+  return parseDateOnlyToUtc(loan.due_date);
+};
+
+const roundMoney = (value: number) => Math.round(value * 100) / 100;
+
+const buildRecalculatedPenaltyMap = (loans: LoanRow[], collections: CollectionRow[]) => {
+  const loanById = new Map<number, LoanRow>();
+  loans.forEach((loan) => {
+    loanById.set(Number(loan.id || 0), loan);
+  });
+
+  const groupedCollections = new Map<number, CollectionRow[]>();
+  collections.forEach((row) => {
+    const loanId = Number(row.mf_loan_request_id || 0);
+    if (!loanId) return;
+
+    const existing = groupedCollections.get(loanId) || [];
+    existing.push(row);
+    groupedCollections.set(loanId, existing);
+  });
+
+  const penaltyByCollectionId = new Map<number, number>();
+  const msPerDay = 1000 * 60 * 60 * 24;
+
+  groupedCollections.forEach((loanCollections, loanId) => {
+    const loan = loanById.get(loanId);
+    if (!loan) return;
+
+    const installmentAmount = Number(loan.installment_amount || 0);
+    const penaltyRate = Number(loan.penalty_rate || 0);
+    const graceDays = Math.max(Number(loan.penalty_grace_days ?? 2), 0);
+    const refundOption = String(loan.refund_option || 'month');
+    const loanEndDate = parseDateOnlyToUtc(loan.loan_end_date);
+
+    if (installmentAmount <= 0) return;
+
+    const initialDueCursor = resolveFirstDueDateFromLoan(loan);
+    if (!initialDueCursor) return;
+    let dueCursor = initialDueCursor;
+
+    let arrearsBalance = 0;
+
+    const sortedLoanCollections = [...loanCollections].sort((a, b) => {
+      const aDate = parseDateOnlyToUtc(a.collection_date || a.created_at || '')?.getTime() || 0;
+      const bDate = parseDateOnlyToUtc(b.collection_date || b.created_at || '')?.getTime() || 0;
+      if (aDate === bDate) return Number(a.id || 0) - Number(b.id || 0);
+      return aDate - bDate;
+    });
+
+    sortedLoanCollections.forEach((row) => {
+      const rowId = Number(row.id || 0);
+      const collectionDate = parseDateOnlyToUtc(row.collection_date || row.created_at || '');
+      if (!rowId || !collectionDate) return;
+
+      const dueDateForPenalty = new Date(dueCursor.getTime());
+      let accrualCapDate = collectionDate;
+      if (loanEndDate && loanEndDate.getTime() < accrualCapDate.getTime()) {
+        accrualCapDate = loanEndDate;
+      }
+
+      let guard = 0;
+      while (dueCursor.getTime() <= accrualCapDate.getTime()) {
+        arrearsBalance += installmentAmount;
+        dueCursor = shiftDateByRefundOptionUtc(dueCursor, refundOption, 1);
+        guard += 1;
+        if (guard > 5000) break;
+      }
+
+      const arrearsOutstandingBefore = Math.max(arrearsBalance, 0);
+      const dayDiff = Math.floor((collectionDate.getTime() - dueDateForPenalty.getTime()) / msPerDay);
+      const lateDays = dayDiff > graceDays ? dayDiff - graceDays : 0;
+      const penaltyAssessed = lateDays > 0 && penaltyRate > 0 ? (arrearsOutstandingBefore * penaltyRate) / 100 : 0;
+      const collectedAmount = Math.max(Number(row.collected_amount || 0), 0);
+      const penaltyAmount = Math.min(collectedAmount, Math.max(penaltyAssessed, 0));
+
+      penaltyByCollectionId.set(rowId, roundMoney(penaltyAmount));
+
+      const amountAfterPenalty = Math.max(collectedAmount - penaltyAmount, 0);
+      arrearsBalance = roundMoney(arrearsBalance - amountAfterPenalty);
+    });
+  });
+
+  return penaltyByCollectionId;
+};
 
 export default function CollectionReportPage() {
   const router = useRouter();
@@ -110,6 +260,7 @@ export default function CollectionReportPage() {
 
         const loans: LoanRow[] = Array.isArray(loanRes.data) ? loanRes.data : [];
         const collections: CollectionRow[] = Array.isArray(collectionRes.data) ? collectionRes.data : [];
+        const recalculatedPenaltyByCollectionId = buildRecalculatedPenaltyMap(loans, collections);
 
         const loanMap = new Map<number, LoanRow>();
         loans.forEach((loan) => {
@@ -128,19 +279,30 @@ export default function CollectionReportPage() {
               relationLoan?.loan_amount ??
               0
             );
+            const loanBalance = Number(loan?.loan_balance ?? relationLoan?.loan_balance ?? Number.NaN);
+            const normalizedInvestment = Number.isFinite(loanBalance)
+              ? Math.max(loanBalance, 0)
+              : Number.isFinite(issuedAmount)
+                ? Math.max(issuedAmount, 0)
+                : 0;
+            const collectionId = Number(collection.id || 0);
+            const storedPenalty = Number(collection.penalty_amount || 0);
+            const recalculatedPenalty = recalculatedPenaltyByCollectionId.get(collectionId);
 
             return {
-              id: Number(collection.id),
+              id: collectionId,
+              loanRequestId: loanId,
               date: String(collection.collection_date || collection.created_at || ''),
               loanCode: String(loan?.loan_code || relationLoan?.loan_code || `LR-${loanId || 0}`),
               customerNo: String(loan?.customer_no || relationLoan?.customer_no || '-'),
               customerName: String(loan?.customer_name || relationLoan?.customer_name || '-'),
               fieldOfficer: String(loan?.field_officer || relationLoan?.field_officer || 'Unassigned'),
               loanAmount: Number.isFinite(issuedAmount) ? issuedAmount : 0,
+              investmentAmount: normalizedInvestment,
               collected: Number(collection.collected_amount || 0),
               capital: Number(collection.capital_amount || 0),
               interest: Number(collection.interest_amount || 0),
-              penalty: Number(collection.penalty_amount || 0),
+              penalty: typeof recalculatedPenalty === 'number' ? recalculatedPenalty : storedPenalty,
               paymentType: String(collection.payment_type || '-').replace('_', ' '),
               reference: String(collection.payment_reference || '-'),
             };
@@ -186,11 +348,13 @@ export default function CollectionReportPage() {
     let totalCapital = 0;
     let totalInterest = 0;
     let totalPenalty = 0;
+    let totalInvestment = 0;
 
     const today = new Date().toISOString().slice(0, 10);
     let todayCollected = 0;
 
     const officers = new Set<string>();
+    const investmentByLoan = new Map<number, number>();
 
     filteredRows.forEach((row) => {
       totalCollected += row.collected;
@@ -205,10 +369,19 @@ export default function CollectionReportPage() {
       if (row.fieldOfficer && row.fieldOfficer !== 'Unassigned') {
         officers.add(row.fieldOfficer);
       }
+
+      if (row.loanRequestId > 0 && !investmentByLoan.has(row.loanRequestId)) {
+        investmentByLoan.set(row.loanRequestId, Number(row.investmentAmount || 0));
+      }
+    });
+
+    investmentByLoan.forEach((amount) => {
+      totalInvestment += amount;
     });
 
     return {
       totalCollected,
+      totalInvestment,
       totalCapital,
       totalInterest,
       totalPenalty,
@@ -425,6 +598,14 @@ export default function CollectionReportPage() {
               <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Total Collected</p>
               <p className="text-sm sm:text-base font-bold text-emerald-700 mt-1 break-words [overflow-wrap:anywhere]">
                 {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalCollected)}
+              </p>
+            </div>
+            <div className="relative overflow-hidden rounded-2xl border border-indigo-100 bg-gradient-to-br from-white via-indigo-50/65 to-cyan-50/70 p-4 shadow-sm">
+              <div className="absolute -right-7 -top-7 h-16 w-16 rounded-full bg-indigo-200/40 blur-xl"></div>
+              <div className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700 text-xs font-bold">TI</div>
+              <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-500">Total Investment</p>
+              <p className="text-sm sm:text-base font-bold text-indigo-700 mt-1 break-words [overflow-wrap:anywhere]">
+                {new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR', maximumFractionDigits: 2 }).format(summary.totalInvestment)}
               </p>
             </div>
             <div className="relative overflow-hidden rounded-2xl border border-sky-100 bg-gradient-to-br from-white via-sky-50/70 to-cyan-50/70 p-4 shadow-sm">

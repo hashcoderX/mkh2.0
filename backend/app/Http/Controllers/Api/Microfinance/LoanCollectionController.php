@@ -172,6 +172,7 @@ class LoanCollectionController extends Controller
         $graceDays = max((int)($loanRequest->penalty_grace_days ?? 2), 0);
         $lateDays = 0;
         $penaltyAssessed = 0.0;
+        $arrearsOutstandingBefore = max($arrearsBalanceBefore, 0);
 
         if (!empty($loanRequest->due_date) && $penaltyRate > 0) {
             $dueDate = new \DateTimeImmutable((string)$loanRequest->due_date);
@@ -180,8 +181,8 @@ class LoanCollectionController extends Controller
 
             if ($dayDiff > $graceDays) {
                 $lateDays = $dayDiff - $graceDays;
-                // Daily penalty based on installment amount and penalty rate.
-                $penaltyAssessed = ($installmentAmount * $penaltyRate * $lateDays) / 100;
+                // Penalty is charged on accrued arrears using the configured penalty rate.
+                $penaltyAssessed = ($arrearsOutstandingBefore * $penaltyRate) / 100;
             }
         }
 
@@ -189,7 +190,6 @@ class LoanCollectionController extends Controller
         $penaltyAmount = min($collectedAmount, max($penaltyAssessed, 0));
         $amountAfterPenalty = max($collectedAmount - $penaltyAmount, 0);
 
-        $arrearsOutstandingBefore = max($arrearsBalanceBefore, 0);
         $arrearsDeducted = min($amountAfterPenalty, $arrearsOutstandingBefore);
         $remainingAfterArrears = max($amountAfterPenalty - $arrearsDeducted, 0);
         $arrearsBalanceAfterPayment = $arrearsBalanceBefore - $amountAfterPenalty;

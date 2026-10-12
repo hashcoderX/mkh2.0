@@ -300,11 +300,12 @@ export default function MicrofinanceDashboard() {
       description: 'Track payment history by customer with capital, interest, and penalty details.',
       path: '/dashboard/microfinance/reports/customer-payment-history',
       permissionTokens: ['customer payment history report', '/dashboard/microfinance/reports/customer-payment-history'],
+      fieldOfficerAccess: true,
     },
   ];
 
   const visibleReportModules = reportModules.filter((report) =>
-    isAdminUser || hasAnyPermissionToken(report.permissionTokens)
+    isAdminUser || (isFieldOfficer && report.fieldOfficerAccess) || hasAnyPermissionToken(report.permissionTokens)
   );
 
   const summaryReportCards = [
