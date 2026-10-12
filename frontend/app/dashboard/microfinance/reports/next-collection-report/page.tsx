@@ -211,8 +211,15 @@ export default function NextCollectionReportPage() {
     const normalizedOfficerFilter = normalizeText(officerFilter);
 
     return rows.filter((row) => {
-      if (officerFilter !== 'all' && normalizeText(row.fieldOfficer) !== normalizedOfficerFilter) {
-        return false;
+      if (officerFilter !== 'all') {
+        const normalizedOfficer = normalizeText(row.fieldOfficer);
+        const isExactMatch = normalizedOfficer === normalizedOfficerFilter;
+        const isContainsMatch =
+          normalizedOfficer.includes(normalizedOfficerFilter) || normalizedOfficerFilter.includes(normalizedOfficer);
+
+        if (!isExactMatch && !isContainsMatch) {
+          return false;
+        }
       }
 
       if (!search) return true;
@@ -224,6 +231,15 @@ export default function NextCollectionReportPage() {
       return haystack.includes(search);
     });
   }, [rows, keyword, officerFilter]);
+
+  useEffect(() => {
+    if (officerFilter === 'all') return;
+
+    const normalizedOptions = new Set(officerOptions.map((officer) => normalizeText(officer)));
+    if (!normalizedOptions.has(normalizeText(officerFilter))) {
+      setOfficerFilter('all');
+    }
+  }, [officerOptions, officerFilter]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -451,7 +467,7 @@ export default function NextCollectionReportPage() {
               >
                 <option value="all">All Officers</option>
                 {officerOptions.map((officer) => (
-                  <option key={officer} value={officer}>
+                  <option key={officer} value={normalizeText(officer)}>
                     {officer}
                   </option>
                 ))}

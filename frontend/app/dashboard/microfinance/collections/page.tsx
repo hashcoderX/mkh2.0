@@ -587,6 +587,60 @@ export default function CollectionManagementPage() {
     return Math.max(totalPayable - paidTotal, 0);
   };
 
+  const getLoanPaidCompletionPercentage = (loan: LoanRow) => {
+    const totalPayable = Number(loan.refundable_amount || loan.loan_amount || 0);
+    if (totalPayable <= 0) return 0;
+
+    const paidTotal = getPaidTotal(loan.id);
+    if (paidTotal >= totalPayable - 0.009) {
+      return 100;
+    }
+
+    return Math.min(Math.max((paidTotal / totalPayable) * 100, 0), 100);
+  };
+
+  const formatPercentage = (value: number) => `${value.toFixed(1)}%`;
+
+  const getPaidCompletionTone = (value: number) => {
+    if (value >= 99.95) {
+      return {
+        textClass: 'text-emerald-700',
+        badgeClass: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+        panelClass: 'border-emerald-100 bg-emerald-50/60',
+      };
+    }
+
+    if (value <= 0.05) {
+      return {
+        textClass: 'text-rose-700',
+        badgeClass: 'border-rose-200 bg-rose-50 text-rose-700',
+        panelClass: 'border-rose-100 bg-rose-50/60',
+      };
+    }
+
+    if (value >= 75) {
+      return {
+        textClass: 'text-lime-700',
+        badgeClass: 'border-lime-200 bg-lime-50 text-lime-700',
+        panelClass: 'border-lime-100 bg-lime-50/60',
+      };
+    }
+
+    if (value >= 40) {
+      return {
+        textClass: 'text-amber-700',
+        badgeClass: 'border-amber-200 bg-amber-50 text-amber-700',
+        panelClass: 'border-amber-100 bg-amber-50/60',
+      };
+    }
+
+    return {
+      textClass: 'text-orange-700',
+      badgeClass: 'border-orange-200 bg-orange-50 text-orange-700',
+      panelClass: 'border-orange-100 bg-orange-50/60',
+    };
+  };
+
   const getLoanRowClassName = (loan: LoanRow, isClickable = false) => {
     const isSettled = getOutstandingBalance(loan) <= 0.009;
     const isPaidToday = getLastPayDate(loan) === getTodayDateOnly();
@@ -1614,6 +1668,7 @@ export default function CollectionManagementPage() {
                     <th className="px-3 py-2 font-semibold">Customer</th>
                     <th className="px-3 py-2 font-semibold">Scope</th>
                     <th className="px-3 py-2 font-semibold">Installment</th>
+                    <th className="px-3 py-2 font-semibold">Paid %</th>
                     <th className="px-3 py-2 font-semibold">Outstanding</th>
                     <th className="px-3 py-2 font-semibold">Penalty</th>
                     <th className="px-3 py-2 font-semibold">Due Date</th>
@@ -1631,6 +1686,11 @@ export default function CollectionManagementPage() {
                       <td className="px-3 py-2">{getDisplayCustomerName(loan)}</td>
                       <td className="px-3 py-2 capitalize">{String(loan.loan_scope || '-').replace('_', ' ')}</td>
                       <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-lg border px-2 py-0.5 text-xs font-semibold ${getPaidCompletionTone(getLoanPaidCompletionPercentage(loan)).badgeClass}`}>
+                          {formatPercentage(getLoanPaidCompletionPercentage(loan))}
+                        </span>
+                      </td>
                       <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
                       <td className="px-3 py-2 text-fuchsia-700 font-semibold">{getLoanPenaltyAmount(loan).toFixed(2)}</td>
                       <td className="px-3 py-2">{formatDateDisplay(loan.due_date)}</td>
@@ -1897,6 +1957,7 @@ export default function CollectionManagementPage() {
                           <th className="px-3 py-2 font-semibold">Loan Amount</th>
                           <th className="px-3 py-2 font-semibold">Installment</th>
                           <th className="px-3 py-2 font-semibold">Paid Total</th>
+                          <th className="px-3 py-2 font-semibold">Paid %</th>
                           <th className="px-3 py-2 font-semibold">Outstanding</th>
                           <th className="px-3 py-2 font-semibold">Arrears</th>
                           <th className="px-3 py-2 font-semibold">Penalty</th>
@@ -1940,6 +2001,11 @@ export default function CollectionManagementPage() {
                               <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>
                               <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
                               <td className="px-3 py-2 text-emerald-700 font-semibold">{getPaidTotal(loan.id).toFixed(2)}</td>
+                              <td className="px-3 py-2">
+                                <span className={`inline-flex rounded-lg border px-2 py-0.5 text-xs font-semibold ${getPaidCompletionTone(getLoanPaidCompletionPercentage(loan)).badgeClass}`}>
+                                  {formatPercentage(getLoanPaidCompletionPercentage(loan))}
+                                </span>
+                              </td>
                               <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
                               <td className="px-3 py-2 text-red-700 font-semibold">{getArrearsAmount(loan).toFixed(2)}</td>
                               <td className="px-3 py-2 text-fuchsia-700 font-semibold">{getLoanPenaltyAmount(loan).toFixed(2)}</td>
@@ -2010,6 +2076,7 @@ export default function CollectionManagementPage() {
                           <th className="px-3 py-2 font-semibold">Loan Amount</th>
                           <th className="px-3 py-2 font-semibold">Installment</th>
                           <th className="px-3 py-2 font-semibold">Paid Total</th>
+                          <th className="px-3 py-2 font-semibold">Paid %</th>
                           <th className="px-3 py-2 font-semibold">Outstanding</th>
                           <th className="px-3 py-2 font-semibold">Arrears</th>
                           <th className="px-3 py-2 font-semibold">Penalty</th>
@@ -2045,6 +2112,11 @@ export default function CollectionManagementPage() {
                               <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>
                               <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
                               <td className="px-3 py-2 text-emerald-700 font-semibold">{getPaidTotal(loan.id).toFixed(2)}</td>
+                              <td className="px-3 py-2">
+                                <span className={`inline-flex rounded-lg border px-2 py-0.5 text-xs font-semibold ${getPaidCompletionTone(getLoanPaidCompletionPercentage(loan)).badgeClass}`}>
+                                  {formatPercentage(getLoanPaidCompletionPercentage(loan))}
+                                </span>
+                              </td>
                               <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
                               <td className="px-3 py-2 text-red-700 font-semibold">{getArrearsAmount(loan).toFixed(2)}</td>
                               <td className="px-3 py-2 text-fuchsia-700 font-semibold">{getLoanPenaltyAmount(loan).toFixed(2)}</td>
@@ -2094,6 +2166,7 @@ export default function CollectionManagementPage() {
                         <th className="px-3 py-2 font-semibold">Loan Amount</th>
                         <th className="px-3 py-2 font-semibold">Installment</th>
                         <th className="px-3 py-2 font-semibold">Paid Total</th>
+                        <th className="px-3 py-2 font-semibold">Paid %</th>
                         <th className="px-3 py-2 font-semibold">Outstanding</th>
                         <th className="px-3 py-2 font-semibold">Arrears</th>
                         <th className="px-3 py-2 font-semibold">Penalty</th>
@@ -2120,6 +2193,11 @@ export default function CollectionManagementPage() {
                           <td className="px-3 py-2">{Number(loan.loan_amount || 0).toFixed(2)}</td>
                           <td className="px-3 py-2">{Number(loan.installment_amount || 0).toFixed(2)}</td>
                           <td className="px-3 py-2 text-emerald-700 font-semibold">{getPaidTotal(loan.id).toFixed(2)}</td>
+                          <td className="px-3 py-2">
+                            <span className={`inline-flex rounded-lg border px-2 py-0.5 text-xs font-semibold ${getPaidCompletionTone(getLoanPaidCompletionPercentage(loan)).badgeClass}`}>
+                              {formatPercentage(getLoanPaidCompletionPercentage(loan))}
+                            </span>
+                          </td>
                           <td className="px-3 py-2 text-rose-700 font-semibold">{getOutstandingBalance(loan).toFixed(2)}</td>
                           <td className="px-3 py-2 text-red-700 font-semibold">{getArrearsAmount(loan).toFixed(2)}</td>
                           <td className="px-3 py-2 text-fuchsia-700 font-semibold">{getLoanPenaltyAmount(loan).toFixed(2)}</td>
@@ -2322,6 +2400,12 @@ export default function CollectionManagementPage() {
                   <div className="rounded-xl border border-cyan-100 bg-white p-3"><p className="text-xs text-slate-500">Installment Amount</p><p className="font-semibold text-slate-900">{Number(loanDetailsModal.loan.installment_amount || 0).toFixed(2)}</p></div>
 
                   <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 p-3"><p className="text-xs text-emerald-700">Paid Total</p><p className="font-extrabold text-emerald-700">{getPaidTotal(loanDetailsModal.loan.id).toFixed(2)}</p></div>
+                  <div className={`rounded-xl border p-3 ${getPaidCompletionTone(getLoanPaidCompletionPercentage(loanDetailsModal.loan)).panelClass}`}>
+                    <p className={`text-xs ${getPaidCompletionTone(getLoanPaidCompletionPercentage(loanDetailsModal.loan)).textClass}`}>Paid Completion</p>
+                    <p className={`font-extrabold ${getPaidCompletionTone(getLoanPaidCompletionPercentage(loanDetailsModal.loan)).textClass}`}>
+                      {formatPercentage(getLoanPaidCompletionPercentage(loanDetailsModal.loan))}
+                    </p>
+                  </div>
                   <div className="rounded-xl border border-rose-100 bg-rose-50/60 p-3"><p className="text-xs text-rose-700">Outstanding Balance</p><p className="font-extrabold text-rose-700">{getOutstandingBalance(loanDetailsModal.loan).toFixed(2)}</p></div>
                   <div className="rounded-xl border border-amber-100 bg-amber-50/60 p-3"><p className="text-xs text-amber-700">Arrears</p><p className="font-extrabold text-amber-700">{getArrearsAmount(loanDetailsModal.loan).toFixed(2)}</p></div>
 

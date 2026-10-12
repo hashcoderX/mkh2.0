@@ -133,6 +133,38 @@ const ensureMicrofinanceSummaryTemplates = (
   return merged;
 };
 
+const normalizePermissionName = (value: string): string =>
+  String(value || '').toLowerCase().trim();
+
+const mergeTemplatesWithExistingPermissions = (
+  templates: PermissionTemplate[],
+  permissions: Permission[]
+): PermissionTemplate[] => {
+  const byName = new Set(templates.map((item) => normalizePermissionName(item.name)));
+  const merged = [...templates];
+
+  for (const permission of permissions) {
+    const normalizedName = normalizePermissionName(permission.name);
+    if (!normalizedName || byName.has(normalizedName)) {
+      continue;
+    }
+
+    merged.push({
+      key: String(permission.name || '').trim(),
+      name: String(permission.name || '').trim(),
+      module: String(permission.module || 'General').trim() || 'General',
+      section: 'Existing Permissions',
+      action: String(permission.name || '').trim(),
+      route: '',
+      description: String(permission.description || permission.name || '').trim(),
+    });
+
+    byName.add(normalizedName);
+  }
+
+  return merged;
+};
+
 export default function RolesAddPage() {
   const router = useRouter();
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -255,14 +287,15 @@ export default function RolesAddPage() {
   };
 
   const groupedPermissions = useMemo(() => {
+    const allPermissionTemplates = mergeTemplatesWithExistingPermissions(permissionTemplates, existingPermissions);
     const keyword = permissionSearch.trim().toLowerCase();
 
     const filtered = keyword
-      ? permissionTemplates.filter((item) => {
+      ? allPermissionTemplates.filter((item) => {
           const text = `${item.module} ${item.section} ${item.action} ${item.route} ${item.description}`.toLowerCase();
           return text.includes(keyword);
         })
-      : permissionTemplates;
+      : allPermissionTemplates;
 
     const groupMap = new Map<string, PermissionTemplate[]>();
 
@@ -281,17 +314,18 @@ export default function RolesAddPage() {
         items: [...items].sort((a, b) => a.action.localeCompare(b.action)),
       }))
       .sort((a, b) => `${a.module} ${a.section}`.localeCompare(`${b.module} ${b.section}`));
-  }, [permissionTemplates, permissionSearch]);
+  }, [permissionTemplates, existingPermissions, permissionSearch]);
 
   const groupedPermissionsForModal = useMemo(() => {
+    const allPermissionTemplates = mergeTemplatesWithExistingPermissions(permissionTemplates, existingPermissions);
     const keyword = permissionsModalSearch.trim().toLowerCase();
 
     const filtered = keyword
-      ? permissionTemplates.filter((item) => {
+      ? allPermissionTemplates.filter((item) => {
           const text = `${item.module} ${item.section} ${item.action} ${item.route} ${item.description}`.toLowerCase();
           return text.includes(keyword);
         })
-      : permissionTemplates;
+      : allPermissionTemplates;
 
     const groupMap = new Map<string, PermissionTemplate[]>();
 
@@ -310,7 +344,7 @@ export default function RolesAddPage() {
         items: [...items].sort((a, b) => a.action.localeCompare(b.action)),
       }))
       .sort((a, b) => `${a.module} ${a.section}`.localeCompare(`${b.module} ${b.section}`));
-  }, [permissionTemplates, permissionsModalSearch]);
+  }, [permissionTemplates, existingPermissions, permissionsModalSearch]);
 
   const allFilteredKeys = useMemo(
     () => groupedPermissions.flatMap((group) => group.items.map((item) => item.key)),
@@ -366,7 +400,8 @@ export default function RolesAddPage() {
   };
 
   const resolvePermissionIdsForKeys = async (keys: string[]): Promise<number[]> => {
-    const selectedTemplates = permissionTemplates.filter((tpl) => keys.includes(tpl.key));
+    const allPermissionTemplates = mergeTemplatesWithExistingPermissions(permissionTemplates, existingPermissions);
+    const selectedTemplates = allPermissionTemplates.filter((tpl) => keys.includes(tpl.key));
     if (selectedTemplates.length === 0) {
       return [];
     }
@@ -426,14 +461,15 @@ export default function RolesAddPage() {
   };
 
   const openPermissionsModal = (role: Role) => {
+    const allPermissionTemplates = mergeTemplatesWithExistingPermissions(permissionTemplates, existingPermissions);
     const assignedNames = new Set(
       (role.permissions || [])
-        .map((permission) => String(permission.name || '').toLowerCase().trim())
+        .map((permission) => normalizePermissionName(permission.name))
         .filter(Boolean)
     );
 
-    const matchedKeys = permissionTemplates
-      .filter((tpl) => assignedNames.has(String(tpl.name || '').toLowerCase().trim()))
+    const matchedKeys = allPermissionTemplates
+      .filter((tpl) => assignedNames.has(normalizePermissionName(tpl.name)))
       .map((tpl) => tpl.key);
 
     setEditingPermissionsRole(role);
