@@ -282,6 +282,7 @@ export default function MicrofinanceDashboard() {
       description: 'Check next-day collections by filtering loans using next collection date.',
       path: '/dashboard/microfinance/reports/next-collection-report',
       permissionTokens: ['next collection report', '/dashboard/microfinance/reports/next-collection-report'],
+      fieldOfficerAccess: true,
     },
     {
       name: 'Year End Summary Report',

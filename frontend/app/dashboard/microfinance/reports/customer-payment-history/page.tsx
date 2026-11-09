@@ -12,6 +12,7 @@ type LoanRow = {
   customer_no?: string | null;
   customer_name?: string | null;
   field_officer?: string | null;
+  loan_amount?: number | string | null;
   due_date?: string | null;
   next_payment_date?: string | null;
   installment_amount?: number | string | null;
@@ -54,6 +55,7 @@ type LoanSummaryRow = {
   customerNo: string;
   customerName: string;
   fieldOfficer: string;
+  loanAmount: number;
   installmentAmount: number;
   refundableAmount: number;
   outstandingAmount: number;
@@ -266,6 +268,7 @@ export default function CustomerPaymentHistoryReportPage() {
           customerNo: String(loan.customer_no || '-'),
           customerName: String(loan.customer_name || '-'),
           fieldOfficer: String(loan.field_officer || 'Unassigned'),
+          loanAmount: Math.max(Number(loan.loan_amount || 0), 0),
           installmentAmount: installment,
           refundableAmount,
           outstandingAmount: pendingAmount,
@@ -478,6 +481,8 @@ export default function CustomerPaymentHistoryReportPage() {
         'Customer No',
         'Customer',
         'Officer',
+        'Loan Amount',
+        'Refundable',
         'Txns',
         'Collected',
         'Capital',
@@ -492,6 +497,8 @@ export default function CustomerPaymentHistoryReportPage() {
         row.customerNo,
         row.customerName,
         row.fieldOfficer,
+        formatMoney(row.loanAmount),
+        formatMoney(row.refundableAmount),
         row.transactionCount,
         formatMoney(row.collected),
         formatMoney(row.capital),
@@ -547,12 +554,13 @@ export default function CustomerPaymentHistoryReportPage() {
       body: [
         ['Loan Code', selectedLoan.loanCode, 'Customer No', selectedLoan.customerNo],
         ['Customer', selectedLoan.customerName, 'Field Officer', selectedLoan.fieldOfficer],
-        ['Installment', formatMoney(selectedLoan.installmentAmount), 'Refundable', formatMoney(selectedLoan.refundableAmount)],
-        ['Outstanding', formatMoney(selectedLoan.outstandingAmount), 'Arrears', formatMoney(selectedLoan.arrears)],
-        ['Collected', formatMoney(selectedLoan.collected), 'Capital', formatMoney(selectedLoan.capital)],
-        ['Interest', formatMoney(selectedLoan.interest), 'Penalty', formatMoney(selectedLoan.penalty)],
-        ['Due Date', formatDateOnly(selectedLoan.dueDate), 'Next Payment', formatDateOnly(selectedLoan.nextPaymentDate)],
-        ['Transactions', String(selectedLoan.transactionCount), 'Last Payment', formatDateTime(selectedLoan.lastPaymentDate)],
+        ['Loan Amount', formatMoney(selectedLoan.loanAmount), 'Installment', formatMoney(selectedLoan.installmentAmount)],
+        ['Refundable', formatMoney(selectedLoan.refundableAmount), 'Outstanding', formatMoney(selectedLoan.outstandingAmount)],
+        ['Arrears', formatMoney(selectedLoan.arrears), 'Collected', formatMoney(selectedLoan.collected)],
+        ['Capital', formatMoney(selectedLoan.capital), 'Interest', formatMoney(selectedLoan.interest)],
+        ['Penalty', formatMoney(selectedLoan.penalty), 'Due Date', formatDateOnly(selectedLoan.dueDate)],
+        ['Next Payment', formatDateOnly(selectedLoan.nextPaymentDate), 'Transactions', String(selectedLoan.transactionCount)],
+        ['Last Payment', formatDateTime(selectedLoan.lastPaymentDate), '', ''],
       ],
       styles: {
         fontSize: 8,

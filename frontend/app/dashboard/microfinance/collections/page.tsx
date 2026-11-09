@@ -246,6 +246,12 @@ const getTodayDateOnly = () => {
   return `${year}-${month}-${day}`;
 };
 
+const toDateOnlyText = (value?: string | null) => {
+  const parts = parseDateOnlyParts(String(value || ''));
+  if (!parts) return '';
+  return `${String(parts.year).padStart(4, '0')}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+};
+
 const calculatePenaltyEstimate = ({
   dueDate,
   paymentDate,
@@ -644,9 +650,23 @@ export default function CollectionManagementPage() {
   const getLoanRowClassName = (loan: LoanRow, isClickable = false) => {
     const isSettled = getOutstandingBalance(loan) <= 0.009;
     const isPaidToday = getLastPayDate(loan) === getTodayDateOnly();
+    const loanEndDate = parseDateOnlyToUtc(loan.loan_end_date);
+    const todayDate = parseDateOnlyToUtc(getTodayDateOnly());
+    const daysToLoanEnd =
+      loanEndDate && todayDate
+        ? Math.floor((loanEndDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24))
+        : null;
+    const isNearLoanEnd =
+      !isSettled &&
+      daysToLoanEnd !== null &&
+      daysToLoanEnd >= 0 &&
+      daysToLoanEnd <= 7;
+
     const toneClass = isSettled
       || isPaidToday
       ? 'bg-emerald-50/60 hover:bg-emerald-100/70 border-l-2 border-l-emerald-700/55'
+      : isNearLoanEnd
+        ? 'bg-amber-50/70 hover:bg-amber-100/80 border-l-2 border-l-amber-600/65'
       : 'bg-rose-50/55 hover:bg-rose-100/70 border-l-2 border-l-rose-700/60';
 
     return `border-b border-cyan-100 last:border-b-0 transition-colors${isClickable ? ' cursor-pointer' : ''} ${toneClass}`;
@@ -1130,28 +1150,28 @@ export default function CollectionManagementPage() {
     officeView === 'today_debt' ? todayDate : officeView === 'date_debt' ? debtTargetDate : null;
 
   const officeDisplayLoans = useMemo(() => {
+    const isLoanInDebtWindow = (loan: LoanRow, targetDateOnly: string) => {
+      if (!targetDateOnly) return false;
+      if (getOutstandingBalance(loan) <= 0) return false;
+
+      const dueDate = toDateOnlyText(loan.due_date || loan.next_payment_date || '');
+      if (!dueDate) return false;
+
+      return dueDate <= targetDateOnly;
+    };
+
     if (activeMode === 'today') {
-      return filteredLoans.filter((loan) => {
-        const dueDate = String(loan.due_date || '').slice(0, 10);
-        return dueDate === todayDate && getOutstandingBalance(loan) > 0;
-      });
+      return filteredLoans.filter((loan) => isLoanInDebtWindow(loan, todayDate));
     }
 
     if (activeMode === 'next') {
-      return filteredLoans.filter((loan) => {
-        const dueDate = String(loan.due_date || '').slice(0, 10);
-        return dueDate === debtTargetDate && getOutstandingBalance(loan) > 0;
-      });
+      return filteredLoans.filter((loan) => isLoanInDebtWindow(loan, debtTargetDate));
     }
 
     if (activeMode !== 'office') return filteredLoans;
     if (!officeDebtDate) return filteredLoans;
 
-    return filteredLoans.filter((loan) => {
-      const dueDate = String(loan.due_date || '').slice(0, 10);
-      if (dueDate !== officeDebtDate) return false;
-      return getOutstandingBalance(loan) > 0;
-    });
+    return filteredLoans.filter((loan) => isLoanInDebtWindow(loan, officeDebtDate));
   }, [activeMode, officeDebtDate, filteredLoans, todayDate, debtTargetDate]);
 
   const officeDebtAmount = useMemo(
@@ -1483,7 +1503,7 @@ export default function CollectionManagementPage() {
           ? {
               badge: 'Today Desk',
               title: 'Debt To Be Collected Today',
-              subtitle: 'Focus on all due installments scheduled for today.',
+              subtitle: 'Includes today due + unpaid carry-forward loans up to today.',
               glow: 'from-rose-400/45 to-orange-300/25',
               accent: 'from-rose-500 to-orange-500',
             }
@@ -1491,7 +1511,7 @@ export default function CollectionManagementPage() {
             ? {
                 badge: 'Next Day Desk',
                 title: 'Next Collection Loans',
-                subtitle: 'Prepare upcoming collections for the next day.',
+                subtitle: 'Preview selected day due loans and unpaid carry-forward loans.',
                 glow: 'from-indigo-400/45 to-sky-300/25',
                 accent: 'from-indigo-500 to-sky-500',
               }
@@ -1527,14 +1547,14 @@ export default function CollectionManagementPage() {
           {
             id: 'today' as const,
             title: 'Debt Today',
-            subtitle: 'Loans due for collection today',
+            subtitle: 'Today due + unpaid carry-forward',
             color: 'from-rose-500 to-orange-500',
             bg: 'from-rose-50 to-orange-50',
           },
           {
             id: 'next' as const,
             title: 'Next Collection',
-            subtitle: 'Loans scheduled for next day collection',
+            subtitle: 'Selected day due + unpaid carry-forward',
             color: 'from-indigo-500 to-sky-500',
             bg: 'from-indigo-50 to-sky-50',
           },
@@ -1895,13 +1915,13 @@ export default function CollectionManagementPage() {
                         : activeMode === 'route'
                           ? 'Search route name / code'
                           : activeMode === 'today'
-                            ? 'Search today debt by loan / customer / route'
+                            ? 'Search today debt list by loan / customer / route'
                             : activeMode === 'next'
-                              ? 'Search selected day loans by loan / customer / route'
+                              ? 'Search selected day debt list by loan / customer / route'
                           : activeMode === 'office' && officeView === 'today_debt'
                             ? 'Search debt today by loan / customer / route'
                             : activeMode === 'office' && officeView === 'date_debt'
-                              ? 'Search selected day debt by loan / customer / route'
+                              ? 'Search selected day debt list by loan / customer / route'
                     : 'Search loan code / customer / route'
                 }
                 value={query}
@@ -1934,13 +1954,13 @@ export default function CollectionManagementPage() {
                     ? 'No loans found for selected route.'
                     : 'No routes found for route collection mode.'
                 : activeMode === 'today'
-                  ? 'No due debt found for today.'
+                  ? 'No unpaid due debt found up to today.'
                   : activeMode === 'next'
-                    ? `No due loans found for ${debtTargetDate}.`
+                    ? `No unpaid due loans found up to ${debtTargetDate}.`
                 : officeView === 'today_debt'
-                  ? 'No due debt found for today.'
+                  ? 'No unpaid due debt found up to today.'
                   : officeView === 'date_debt'
-                    ? `No due debt found for ${debtTargetDate || 'selected date'}.`
+                    ? `No unpaid due debt found up to ${debtTargetDate || 'selected date'}.`
                   : 'No records found for this collection mode.'}
             </div>
           ) : (

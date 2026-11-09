@@ -94,6 +94,7 @@ export default function RepaymentReportPage() {
   const [rows, setRows] = useState<RepaymentRow[]>([]);
   const [officerFilter, setOfficerFilter] = useState('all');
   const [repaymentFilter, setRepaymentFilter] = useState<'all' | 'excellent' | 'good' | 'watch' | 'critical'>('all');
+  const [outstandingFilter, setOutstandingFilter] = useState<'active' | 'ended' | 'all'>('active');
 
   const branchId = Number(searchParams.get('branch_id') || 0) || undefined;
 
@@ -155,18 +156,8 @@ export default function RepaymentReportPage() {
             const loanId = Number(loan.id || 0);
             const refundableAmount = Number(loan.refundable_amount || 0);
             const collectedAmount = paidByLoan.get(loanId) || 0;
-            const fallbackOutstandingAmount = Math.max(refundableAmount - collectedAmount, 0);
-            const rawLoanBalance = loan.loan_balance;
-            const hasLoanBalance =
-              rawLoanBalance !== null &&
-              typeof rawLoanBalance !== 'undefined' &&
-              String(rawLoanBalance).trim() !== '';
-            const loanBalance = Number(rawLoanBalance);
-            const outstandingAmount =
-              hasLoanBalance && Number.isFinite(loanBalance)
-                ? Math.max(loanBalance, 0)
-                : fallbackOutstandingAmount;
-            const repaymentRate = refundableAmount > 0 ? (collectedAmount / refundableAmount) * 100 : 0;
+            const outstandingAmount = Math.max(refundableAmount - collectedAmount, 0);
+            const repaymentRate = refundableAmount > 0 ? Math.min((collectedAmount / refundableAmount) * 100, 100) : 0;
 
             const dueDateText = normalizeDateOnly(loan.due_date);
             const nextPaymentDateText = normalizeDateOnly(loan.next_payment_date);
@@ -203,7 +194,6 @@ export default function RepaymentReportPage() {
               repaymentStatus,
             };
           })
-          .filter((row) => row.outstandingAmount > 0)
           .sort((a, b) => b.outstandingAmount - a.outstandingAmount);
 
         setRows(mapped);
@@ -231,9 +221,17 @@ export default function RepaymentReportPage() {
         return false;
       }
 
+      if (outstandingFilter === 'active' && row.outstandingAmount <= 0) {
+        return false;
+      }
+
+      if (outstandingFilter === 'ended' && row.outstandingAmount > 0) {
+        return false;
+      }
+
       return true;
     });
-  }, [rows, officerFilter, repaymentFilter]);
+  }, [rows, officerFilter, repaymentFilter, outstandingFilter]);
 
   const summary = useMemo(() => {
     return filteredRows.reduce(
@@ -349,11 +347,17 @@ export default function RepaymentReportPage() {
 
     const officerText = officerFilter === 'all' ? 'Officer: All' : `Officer: ${officerFilter}`;
     const statusText = `Repayment Status: ${repaymentFilter}`;
+    const outstandingText =
+      outstandingFilter === 'active'
+        ? 'Outstanding: Active Only'
+        : outstandingFilter === 'ended'
+          ? 'Outstanding: Ended Only'
+          : 'Outstanding: All';
 
     doc.setFontSize(16);
     doc.text('Re-Payment Report', 40, 40);
     doc.setFontSize(10);
-    doc.text(`${officerText} | ${statusText} | Generated: ${generatedAt}`, 40, 58);
+    doc.text(`${officerText} | ${statusText} | ${outstandingText} | Generated: ${generatedAt}`, 40, 58);
 
     autoTable(doc, {
       startY: 72,
@@ -518,11 +522,24 @@ export default function RepaymentReportPage() {
                   <option value="critical">Critical</option>
                 </select>
               </div>
+              <div>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Outstanding</label>
+                <select
+                  value={outstandingFilter}
+                  onChange={(e) => setOutstandingFilter(e.target.value as 'active' | 'ended' | 'all')}
+                  className="mt-1 px-3 py-2 rounded-xl border border-cyan-100 bg-white text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-cyan-200"
+                >
+                  <option value="active">Active Only</option>
+                  <option value="ended">Ended / Full Paid</option>
+                  <option value="all">All</option>
+                </select>
+              </div>
               <button
                 type="button"
                 onClick={() => {
                   setOfficerFilter('all');
                   setRepaymentFilter('all');
+                  setOutstandingFilter('active');
                 }}
                 className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 text-sm font-semibold border border-slate-200"
               >

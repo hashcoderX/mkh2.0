@@ -153,25 +153,17 @@ export default function NextCollectionReportPage() {
           paidByLoan.set(loanId, (paidByLoan.get(loanId) || 0) + Number(collection.collected_amount || 0));
         });
 
+        const selectedCollectionDate = normalizeDateOnly(nextCollectionDate);
+
         const mapped = activeLoans
           .map((loan) => {
             const loanId = Number(loan.id || 0);
             const refundableAmount = Number(loan.refundable_amount || 0);
             const collectedAmount = paidByLoan.get(loanId) || 0;
-            const fallbackOutstandingAmount = Math.max(refundableAmount - collectedAmount, 0);
-            const rawLoanBalance = loan.loan_balance;
-            const hasLoanBalance =
-              rawLoanBalance !== null &&
-              typeof rawLoanBalance !== 'undefined' &&
-              String(rawLoanBalance).trim() !== '';
-            const loanBalance = Number(rawLoanBalance);
-            const outstandingAmount =
-              hasLoanBalance && Number.isFinite(loanBalance)
-                ? Math.max(loanBalance, 0)
-                : fallbackOutstandingAmount;
+            const outstandingAmount = Math.max(refundableAmount - collectedAmount, 0);
             const dueDate = normalizeDateOnly(loan.due_date);
             const nextPaymentDate = normalizeDateOnly(loan.next_payment_date);
-            const targetNextCollectionDate = nextPaymentDate || dueDate;
+            const targetNextCollectionDate = dueDate || nextPaymentDate;
 
             return {
               loanId,
@@ -190,7 +182,11 @@ export default function NextCollectionReportPage() {
               nextCollectionDate: targetNextCollectionDate || '-',
             } as ReportRow;
           })
-          .filter((row) => row.nextCollectionDate !== '-' && row.nextCollectionDate === nextCollectionDate)
+          .filter((row) => row.nextCollectionDate !== '-')
+          .filter((row) => {
+            if (!selectedCollectionDate) return true;
+            return row.nextCollectionDate <= selectedCollectionDate;
+          })
           .filter((row) => row.outstandingAmount > 0)
           .sort((a, b) => b.outstandingAmount - a.outstandingAmount);
 
@@ -435,7 +431,7 @@ export default function NextCollectionReportPage() {
                 Reports Desk
               </span>
               <h1 className="mt-3 text-2xl md:text-4xl font-black tracking-tight text-slate-900">Next Collection Report</h1>
-              <p className="mt-1 max-w-2xl text-sm text-slate-600">Check which loans must be collected on the selected next collection date.</p>
+              <p className="mt-1 max-w-2xl text-sm text-slate-600">Check due loans up to the selected next collection date, including unpaid arrears carry-forward.</p>
             </div>
             <button
               type="button"
@@ -532,7 +528,7 @@ export default function NextCollectionReportPage() {
             </div>
           ) : filteredRows.length === 0 ? (
             <div className="mt-2 rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-100/60 to-teal-100/40 p-8 text-center text-sm text-slate-700">
-              No next-day collection loans found for selected date.
+              No unpaid due or arrears loans found up to selected date.
             </div>
           ) : (
             <>
